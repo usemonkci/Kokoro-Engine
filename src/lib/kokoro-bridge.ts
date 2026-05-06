@@ -801,6 +801,43 @@ export type MemoryRetrievalEvalSummary = {
     readonly candidate_efficiency_pct: number;
 };
 
+export interface MemoryEmbeddingModelStatus {
+    installed: boolean;
+    repo_id: string;
+    download_url: string;
+    install_dir: string;
+    model_path: string;
+    required_files: string[];
+    missing_files: string[];
+}
+
+export interface MemoryEmbeddingModelDownloadProgress {
+    stage: "checking" | "downloading" | "complete" | "verifying" | "ready" | string;
+    message: string;
+    current_file: string;
+    file_index: number;
+    file_count: number;
+    downloaded_bytes: number;
+    total_bytes: number | null;
+}
+
+export async function getMemoryEmbeddingModelStatus(): Promise<MemoryEmbeddingModelStatus> {
+    return invoke<MemoryEmbeddingModelStatus>("get_memory_embedding_model_status");
+}
+
+export async function downloadMemoryEmbeddingModel(): Promise<MemoryEmbeddingModelStatus> {
+    return invoke<MemoryEmbeddingModelStatus>("download_memory_embedding_model");
+}
+
+export async function onMemoryEmbeddingModelProgress(
+    callback: (progress: MemoryEmbeddingModelDownloadProgress) => void
+): Promise<UnlistenFn> {
+    return listen<MemoryEmbeddingModelDownloadProgress>(
+        "memory:embedding-model-progress",
+        (event) => callback(event.payload)
+    );
+}
+
 export async function listMemories(characterId: string, limit = 50, offset = 0): Promise<ListMemoriesResponse> {
     return invoke<ListMemoriesResponse>("list_memories", {
         request: { character_id: characterId, limit, offset },

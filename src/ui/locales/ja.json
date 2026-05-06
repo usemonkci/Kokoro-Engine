@@ -851,7 +851,9 @@
             "image_too_large": "画像が大きすぎます (最大 5MB)",
             "only_images": "画像ファイルのみ対応しています",
             "upload_failed": "画像のアップロードに失敗しました",
-            "connection_error": "接続に問題が発生しました。API設定を確認してください。 💭"
+            "connection_error": "接続に問題が発生しました。API設定を確認してください。 💭",
+            "memory_model_required": "ローカル記憶モデルの準備がまだできていません。ダウンロード完了後にチャットを開始してください。",
+            "memory_model_check_failed": "ローカル記憶モデルの状態を確認できませんでした。先にダウンロードダイアログを確認してください。"
         },
         "input": {
             "placeholder": "話しかけてください...",
@@ -1003,6 +1005,34 @@
             "eyebrow": "初回起動",
             "title": "先に言語を選択してください",
             "description": "UI の言語を選ぶと、デフォルトのチャット言語も一緒に設定されます。あとで設定からいつでも変更できます。"
+        },
+        "memory_model": {
+            "eyebrow": "チャット前の準備",
+            "title": "先にローカル記憶モデルをダウンロードしてください",
+            "description": "最初の会話を始める前に、ローカル記憶モデルのダウンロードが必要です。これは記憶検索（RAG）に使われ、未完了のままだと最初のメッセージで長時間止まって見えることがあります。",
+            "warning_title": "完了前にチャットを始めないでください",
+            "warning": "モデルの準備が終わるまでは記憶検索が正しく動作しません。HuggingFace に接続できない環境では、最初の会話が非常に長く固まって見える場合があります。",
+            "progress_label": "ダウンロード進捗",
+            "current_file": "ファイル {{index}}/{{total}}: {{file}}",
+            "waiting": "ダウンロード開始待ち",
+            "install_path": "インストール先: {{path}}",
+            "error_title": "ダウンロード失敗",
+            "status": {
+                "pending": "開始待ち",
+                "checking": "ローカルファイルを確認中",
+                "downloading": "モデルをダウンロード中",
+                "complete": "ファイルのダウンロード完了",
+                "verifying": "モデルファイルを検証中",
+                "ready": "モデルの準備完了",
+                "error": "ダウンロード失敗"
+            },
+            "actions": {
+                "download": "ダウンロード開始",
+                "downloading": "ダウンロード中",
+                "retry": "再試行",
+                "continue": "チャットに進む",
+                "close": "閉じる"
+            }
         },
         "steps": {
             "open_settings": {

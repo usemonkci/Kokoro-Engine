@@ -153,6 +153,8 @@ pub fn run() {
             commands::memory::update_memory,
             commands::memory::delete_memory,
             commands::memory::update_memory_tier,
+            commands::memory::get_memory_embedding_model_status,
+            commands::memory::download_memory_embedding_model,
             commands::characters::list_characters,
             commands::characters::create_character,
             commands::characters::update_character,

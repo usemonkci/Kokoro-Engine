@@ -851,7 +851,9 @@
             "image_too_large": "Image too large (max 5MB)",
             "only_images": "Only image files are supported",
             "upload_failed": "Failed to upload image",
-            "connection_error": "I'm having trouble connecting right now. Please check your API settings. 💭"
+            "connection_error": "I'm having trouble connecting right now. Please check your API settings. 💭",
+            "memory_model_required": "The local memory model is not ready yet. Finish the download before starting a chat.",
+            "memory_model_check_failed": "Could not confirm the local memory model status. Check the download dialog first."
         },
         "input": {
             "placeholder": "Speak to your companion...",
@@ -1003,6 +1005,34 @@
             "eyebrow": "First launch",
             "title": "Choose a language first",
             "description": "After you pick the interface language, I will also sync the default chat language. You can still change both later in Settings."
+        },
+        "memory_model": {
+            "eyebrow": "Before Chat",
+            "title": "Download the local memory model first",
+            "description": "Before the first chat starts, the app needs to download a local memory model. It is used for memory retrieval (RAG), and the first message may otherwise stall for a long time while the model downloads in the background.",
+            "warning_title": "Do not start chatting before this finishes",
+            "warning": "Until the model is ready, memory retrieval will not work correctly. If your network cannot reach HuggingFace, the first chat may also appear to hang for a very long time.",
+            "progress_label": "Download progress",
+            "current_file": "File {{index}}/{{total}}: {{file}}",
+            "waiting": "Waiting for download to start",
+            "install_path": "Install path: {{path}}",
+            "error_title": "Download failed",
+            "status": {
+                "pending": "Waiting to start",
+                "checking": "Checking local files",
+                "downloading": "Downloading model",
+                "complete": "File download finished",
+                "verifying": "Verifying model files",
+                "ready": "Model is ready",
+                "error": "Download failed"
+            },
+            "actions": {
+                "download": "Start download",
+                "downloading": "Downloading",
+                "retry": "Retry download",
+                "continue": "Continue to chat",
+                "close": "Close"
+            }
         },
         "steps": {
             "open_settings": {

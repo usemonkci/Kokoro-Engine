@@ -1113,6 +1113,7 @@ async fn record_memory_retrieval_if_enabled(
 const LOCAL_MODEL_DIR: &str = "models/models--Qdrant--all-MiniLM-L6-v2-onnx";
 #[cfg(not(test))]
 const MODEL_REPO: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
+const MODEL_PAGE_URL: &str = "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx";
 #[cfg(not(test))]
 const MODEL_AUX_FILES: &[&str] = &[
     "config.json",
@@ -1121,6 +1122,344 @@ const MODEL_AUX_FILES: &[&str] = &[
     "special_tokens_map.json",
     "vocab.txt",
 ];
+#[cfg(not(test))]
+const MODEL_REF_NAME: &str = "main";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryEmbeddingModelStatus {
+    pub installed: bool,
+    pub repo_id: String,
+    pub download_url: String,
+    pub install_dir: String,
+    pub model_path: String,
+    pub required_files: Vec<String>,
+    pub missing_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryEmbeddingModelDownloadProgress {
+    pub stage: String,
+    pub message: String,
+    pub current_file: String,
+    pub file_index: usize,
+    pub file_count: usize,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+}
+
+#[cfg(not(test))]
+fn required_model_files() -> Vec<&'static str> {
+    let mut files = vec!["model.onnx"];
+    files.extend(MODEL_AUX_FILES.iter().copied());
+    files
+}
+
+#[cfg(not(test))]
+fn default_model_cache_dir() -> std::path::PathBuf {
+    dirs_next::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("com.chyin.kokoro")
+        .join("models")
+}
+
+#[cfg(not(test))]
+fn default_model_repo_dir() -> std::path::PathBuf {
+    default_model_cache_dir().join("models--Qdrant--all-MiniLM-L6-v2-onnx")
+}
+
+#[cfg(not(test))]
+fn default_model_snapshot_dir() -> std::path::PathBuf {
+    default_model_repo_dir()
+        .join("snapshots")
+        .join(MODEL_REF_NAME)
+}
+
+#[cfg(not(test))]
+fn missing_required_model_files(snapshot_dir: &std::path::Path) -> Vec<String> {
+    required_model_files()
+        .into_iter()
+        .filter(|file| !snapshot_dir.join(file).is_file())
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(not(test))]
+fn find_existing_model_snapshot_dir(require_complete: bool) -> Option<std::path::PathBuf> {
+    for base in MemoryManager::model_search_roots() {
+        let repo_dir = base.join(LOCAL_MODEL_DIR);
+        let Some(snapshot_dir) = MemoryManager::resolve_snapshot_dir(&repo_dir) else {
+            continue;
+        };
+        if !require_complete || missing_required_model_files(&snapshot_dir).is_empty() {
+            return Some(snapshot_dir);
+        }
+    }
+
+    None
+}
+
+#[cfg(not(test))]
+fn ensure_default_model_repo_layout() -> Result<()> {
+    let repo_dir = default_model_repo_dir();
+    let snapshot_dir = default_model_snapshot_dir();
+    std::fs::create_dir_all(&snapshot_dir)?;
+    std::fs::create_dir_all(repo_dir.join("refs"))?;
+    std::fs::write(repo_dir.join("refs").join(MODEL_REF_NAME), MODEL_REF_NAME)?;
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn build_download_progress(
+    stage: &str,
+    message: String,
+    current_file: String,
+    file_index: usize,
+    file_count: usize,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+) -> MemoryEmbeddingModelDownloadProgress {
+    MemoryEmbeddingModelDownloadProgress {
+        stage: stage.to_string(),
+        message,
+        current_file,
+        file_index,
+        file_count,
+        downloaded_bytes,
+        total_bytes,
+    }
+}
+
+#[cfg(not(test))]
+pub fn memory_embedding_model_status() -> MemoryEmbeddingModelStatus {
+    let snapshot_dir = find_existing_model_snapshot_dir(true)
+        .or_else(|| find_existing_model_snapshot_dir(false))
+        .unwrap_or_else(default_model_snapshot_dir);
+    let missing_files = missing_required_model_files(&snapshot_dir);
+    let model_path = snapshot_dir.join("model.onnx");
+
+    MemoryEmbeddingModelStatus {
+        installed: missing_files.is_empty(),
+        repo_id: MODEL_REPO.to_string(),
+        download_url: MODEL_PAGE_URL.to_string(),
+        install_dir: snapshot_dir.to_string_lossy().into_owned(),
+        model_path: model_path.to_string_lossy().into_owned(),
+        required_files: required_model_files()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        missing_files,
+    }
+}
+
+#[cfg(test)]
+pub fn memory_embedding_model_status() -> MemoryEmbeddingModelStatus {
+    MemoryEmbeddingModelStatus {
+        installed: true,
+        repo_id: "Qdrant/all-MiniLM-L6-v2-onnx".to_string(),
+        download_url: MODEL_PAGE_URL.to_string(),
+        install_dir: String::new(),
+        model_path: String::new(),
+        required_files: vec!["model.onnx".to_string()],
+        missing_files: Vec::new(),
+    }
+}
+
+#[cfg(not(test))]
+#[derive(Clone)]
+struct MemoryModelProgressReporter {
+    emit_progress: std::sync::Arc<
+        dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
+    >,
+    file_name: String,
+    file_index: usize,
+    file_count: usize,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+}
+
+#[cfg(not(test))]
+impl MemoryModelProgressReporter {
+    fn new(
+        emit_progress: std::sync::Arc<
+            dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
+        >,
+        file_name: String,
+        file_index: usize,
+        file_count: usize,
+    ) -> Self {
+        Self {
+            emit_progress,
+            file_name,
+            file_index,
+            file_count,
+            downloaded_bytes: 0,
+            total_bytes: None,
+        }
+    }
+
+    fn emit(&self, stage: &str, message: String) {
+        let progress = build_download_progress(
+            stage,
+            message,
+            self.file_name.clone(),
+            self.file_index,
+            self.file_count,
+            self.downloaded_bytes,
+            self.total_bytes,
+        );
+        if let Err(error) = (self.emit_progress)(progress) {
+            tracing::warn!(
+                target: "memory",
+                "[Memory] Failed to emit download progress: {}",
+                error
+            );
+        }
+    }
+}
+
+#[cfg(not(test))]
+impl hf_hub::api::tokio::Progress for MemoryModelProgressReporter {
+    async fn init(&mut self, size: usize, filename: &str) {
+        self.file_name = filename.to_string();
+        self.downloaded_bytes = 0;
+        self.total_bytes = Some(size as u64);
+        self.emit(
+            "downloading",
+            format!(
+                "Downloading {} ({}/{})",
+                filename, self.file_index, self.file_count
+            ),
+        );
+    }
+
+    async fn update(&mut self, size: usize) {
+        self.downloaded_bytes += size as u64;
+        self.emit(
+            "downloading",
+            format!(
+                "Downloading {} ({}/{})",
+                self.file_name, self.file_index, self.file_count
+            ),
+        );
+    }
+
+    async fn finish(&mut self) {
+        if let Some(total_bytes) = self.total_bytes {
+            self.downloaded_bytes = total_bytes;
+        }
+        self.emit(
+            "complete",
+            format!(
+                "Finished {} ({}/{})",
+                self.file_name, self.file_index, self.file_count
+            ),
+        );
+    }
+}
+
+#[cfg(not(test))]
+pub async fn download_memory_embedding_model<F>(
+    emit_progress: F,
+) -> std::result::Result<MemoryEmbeddingModelStatus, String>
+where
+    F: Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync + 'static,
+{
+    let status = memory_embedding_model_status();
+    if status.installed {
+        emit_progress(build_download_progress(
+            "ready",
+            "Memory embedding model is already installed".to_string(),
+            "model.onnx".to_string(),
+            0,
+            0,
+            0,
+            None,
+        ))?;
+        return Ok(status);
+    }
+
+    ensure_default_model_repo_layout().map_err(|error| error.to_string())?;
+
+    let snapshot_dir = default_model_snapshot_dir();
+    let missing_files = missing_required_model_files(&snapshot_dir);
+    let file_count = missing_files.len();
+    let emit_progress = std::sync::Arc::new(emit_progress);
+
+    emit_progress(build_download_progress(
+        "checking",
+        "Checking required memory model files".to_string(),
+        String::new(),
+        0,
+        file_count,
+        0,
+        None,
+    ))?;
+
+    let endpoint =
+        std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_string());
+    let api = hf_hub::api::tokio::ApiBuilder::new()
+        .with_cache_dir(default_model_cache_dir())
+        .with_endpoint(endpoint)
+        .with_progress(false)
+        .build()
+        .map_err(|error| format!("Failed to initialize HuggingFace downloader: {}", error))?;
+    let repo = api.model(MODEL_REPO.to_string());
+
+    for (index, file_name) in missing_files.iter().enumerate() {
+        let reporter = MemoryModelProgressReporter::new(
+            emit_progress.clone(),
+            file_name.clone(),
+            index + 1,
+            file_count,
+        );
+        repo.download_with_progress(file_name, reporter)
+            .await
+            .map_err(|error| format!("Failed to download {}: {}", file_name, error))?;
+    }
+
+    emit_progress(build_download_progress(
+        "verifying",
+        "Verifying downloaded memory model".to_string(),
+        "model.onnx".to_string(),
+        file_count,
+        file_count,
+        0,
+        None,
+    ))?;
+
+    if MemoryManager::try_load_local().is_none() {
+        return Err(
+            "Model files were downloaded, but local verification failed. Please retry.".to_string(),
+        );
+    }
+
+    let final_status = memory_embedding_model_status();
+    if !final_status.installed {
+        return Err("Model download finished, but required files are still missing.".to_string());
+    }
+
+    emit_progress(build_download_progress(
+        "ready",
+        "Memory embedding model is ready".to_string(),
+        "model.onnx".to_string(),
+        file_count,
+        file_count,
+        0,
+        None,
+    ))?;
+
+    Ok(final_status)
+}
+
+#[cfg(test)]
+pub async fn download_memory_embedding_model<F>(
+    _emit_progress: F,
+) -> std::result::Result<MemoryEmbeddingModelStatus, String>
+where
+    F: Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync + 'static,
+{
+    Ok(memory_embedding_model_status())
+}
 
 impl MemoryManager {
     /// Creates a new MemoryManager without downloading any models.

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useState, useEffect, useMemo, useSyncExternalStore, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import { Settings } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
@@ -16,9 +16,11 @@ import OnboardingOverlay, {
   type OnboardingLanguageCode,
   type OnboardingStep,
 } from "./ui/widgets/OnboardingOverlay";
+import MemoryModelDownloadDialog from "./ui/widgets/MemoryModelDownloadDialog";
 import { useBackgroundSlideshow } from "./ui/hooks/useBackgroundSlideshow";
 import type { Live2DDisplayMode } from "./features/live2d/Live2DViewer";
 import { live2dUrl } from "./lib/utils";
+import { MEMORY_MODEL_DIALOG_EVENT } from "./lib/memory-model-gate";
 
 // Register components synchronously before first render
 registerCoreComponents();
@@ -92,6 +94,7 @@ import {
   setPersona,
   setResponseLanguage,
   getProactiveEnabled,
+  getMemoryEmbeddingModelStatus,
   // Config Getters
   getLlmConfig,
   getImageGenConfig,
@@ -124,6 +127,7 @@ import {
   listMemories,
   updateMemory,
   deleteMemory,
+  downloadMemoryEmbeddingModel,
   // New: Singing (RVC)
   checkRvcStatus,
   listRvcModels,
@@ -163,6 +167,9 @@ import {
   type RvcModelInfo,
   type SingingProgressEvent,
   type CharacterRecord,
+  type MemoryEmbeddingModelStatus,
+  type MemoryEmbeddingModelDownloadProgress,
+  onMemoryEmbeddingModelProgress,
 } from "./lib/kokoro-bridge";
 import type { ThemeConfig } from "./ui/layout/types";
 import { modMessageBus } from "./ui/mods/ModMessageBus";
@@ -282,6 +289,12 @@ function App() {
     const saved = localStorage.getItem("kokoro_proactive_enabled");
     return saved !== null ? saved === "true" : true;
   });
+  const [memoryModelStatus, setMemoryModelStatus] = useState<MemoryEmbeddingModelStatus | null>(null);
+  const [memoryModelProgress, setMemoryModelProgress] = useState<MemoryEmbeddingModelDownloadProgress | null>(null);
+  const [memoryModelDialogOpen, setMemoryModelDialogOpen] = useState(false);
+  const [memoryModelDownloading, setMemoryModelDownloading] = useState(false);
+  const [memoryModelError, setMemoryModelError] = useState<string | null>(null);
+  const memoryModelDownloadInFlightRef = useRef(false);
 
   const modelUrl = useMemo(() => {
     if (customModelPath) {
@@ -352,6 +365,61 @@ function App() {
     applyOnboardingLanguage(language);
   };
 
+  const refreshMemoryModelStatus = useCallback(async () => {
+    const status = await getMemoryEmbeddingModelStatus();
+    setMemoryModelStatus(status);
+    if (status.installed) {
+      setMemoryModelError(null);
+    }
+    return status;
+  }, []);
+
+  const startMemoryModelDownload = useCallback(async () => {
+    if (memoryModelDownloadInFlightRef.current) {
+      return;
+    }
+
+    memoryModelDownloadInFlightRef.current = true;
+    setMemoryModelDialogOpen(true);
+    setMemoryModelDownloading(true);
+    setMemoryModelError(null);
+    setMemoryModelProgress({
+      stage: "checking",
+      message: "",
+      current_file: "",
+      file_index: 0,
+      file_count: 0,
+      downloaded_bytes: 0,
+      total_bytes: null,
+    });
+
+    try {
+      const status = await downloadMemoryEmbeddingModel();
+      setMemoryModelStatus(status);
+    } catch (error) {
+      setMemoryModelError(error instanceof Error ? error.message : String(error));
+    } finally {
+      memoryModelDownloadInFlightRef.current = false;
+      setMemoryModelDownloading(false);
+      refreshMemoryModelStatus().catch((err) => {
+        console.error("[App] Failed to refresh memory model status:", err);
+      });
+    }
+  }, [refreshMemoryModelStatus]);
+
+  const openMemoryModelDialog = useCallback(async () => {
+    setMemoryModelDialogOpen(true);
+
+    try {
+      const status = memoryModelStatus ?? await refreshMemoryModelStatus();
+      if (!status.installed && !memoryModelDownloadInFlightRef.current && !memoryModelError) {
+        void startMemoryModelDownload();
+      }
+    } catch (error) {
+      setMemoryModelError(error instanceof Error ? error.message : String(error));
+    }
+  }, [memoryModelError, memoryModelStatus, refreshMemoryModelStatus, startMemoryModelDownload]);
+
   const closeOnboarding = (status: "completed" | "dismissed") => {
     localStorage.setItem(ONBOARDING_STATUS_KEY, status);
     setOnboardingStep(null);
@@ -384,6 +452,48 @@ function App() {
       setOnboardingStep("chat");
     }
   }, [onboardingStep, settingsOpen]);
+
+  useEffect(() => {
+    refreshMemoryModelStatus().catch((err) => {
+      console.error("[App] Failed to load memory model status:", err);
+      setMemoryModelError(err instanceof Error ? err.message : String(err));
+    });
+  }, [refreshMemoryModelStatus]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    onMemoryEmbeddingModelProgress((progress) => {
+      setMemoryModelProgress(progress);
+      if (progress.stage === "ready") {
+        setMemoryModelDownloading(false);
+        setMemoryModelError(null);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    }).catch((err) => {
+      console.error("[App] Failed to listen for memory model progress:", err);
+    });
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (onboardingStep === "chat" && memoryModelStatus && !memoryModelStatus.installed) {
+      void openMemoryModelDialog();
+    }
+  }, [memoryModelStatus, onboardingStep, openMemoryModelDialog]);
+
+  useEffect(() => {
+    const handleRequireDialog = () => {
+      void openMemoryModelDialog();
+    };
+
+    window.addEventListener(MEMORY_MODEL_DIALOG_EVENT, handleRequireDialog);
+    return () => window.removeEventListener(MEMORY_MODEL_DIALOG_EVENT, handleRequireDialog);
+  }, [openMemoryModelDialog]);
 
   useEffect(() => {
     const sync = () => {
@@ -608,10 +718,21 @@ function App() {
       setSettingsOpen(false);
     }
     if (detail.action === 'send_message' && detail.data?.message) {
-      streamChat({
-        message: detail.data.message,
-        character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
-      }).catch(err => console.error("[App] Mod send_message failed:", err));
+      void (async () => {
+        try {
+          const status = memoryModelStatus ?? await refreshMemoryModelStatus();
+          if (!status.installed) {
+            await openMemoryModelDialog();
+            return;
+          }
+          await streamChat({
+            message: detail.data.message,
+            character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
+          });
+        } catch (err) {
+          console.error("[App] Mod send_message failed:", err);
+        }
+      })();
     }
     // New settings actions
     if (detail.action === 'set_model' && detail.data?.model) {
@@ -1128,6 +1249,22 @@ function App() {
         onLanguageSelect={previewOnboardingLanguage}
         onAdvance={advanceOnboarding}
         onDismiss={() => closeOnboarding("dismissed")}
+      />
+
+      <MemoryModelDownloadDialog
+        open={memoryModelDialogOpen}
+        status={memoryModelStatus}
+        progress={memoryModelProgress}
+        downloading={memoryModelDownloading}
+        error={memoryModelError}
+        onClose={() => setMemoryModelDialogOpen(false)}
+        onDownload={() => {
+          if (memoryModelStatus?.installed) {
+            setMemoryModelDialogOpen(false);
+            return;
+          }
+          void startMemoryModelDownload();
+        }}
       />
 
       {/* Camera watcher — lives at app root so it persists when settings panel closes */}

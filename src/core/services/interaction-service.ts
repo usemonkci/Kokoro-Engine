@@ -6,8 +6,9 @@
  *
  */
 import type { CueName } from "../../features/live2d/Live2DController";
-import { streamChat, onChatTurnFinish } from "../../lib/kokoro-bridge";
+import { streamChat, onChatTurnFinish, getMemoryEmbeddingModelStatus } from "../../lib/kokoro-bridge";
 import { emit } from "@tauri-apps/api/event";
+import { requestMemoryModelDialog } from "../../lib/memory-model-gate";
 
 // ── Types ──────────────────────────────────────────
 
@@ -133,6 +134,32 @@ export class InteractionService {
 
     private async sendGestureToLLM(gesture: GestureEvent, _controller: ControllerProxy): Promise<InteractionEvent> {
         this.isChatBusy = true;
+
+        try {
+            const status = await getMemoryEmbeddingModelStatus();
+            if (!status.installed) {
+                requestMemoryModelDialog();
+                this.isChatBusy = false;
+                const event: InteractionEvent = {
+                    hitArea: gesture.hitArea,
+                    gesture: gesture.gesture,
+                    isCombo: gesture.gesture === "rapid_tap",
+                };
+                this.broadcast(event);
+                return event;
+            }
+        } catch (err) {
+            console.error("[InteractionService] Failed to query memory model status:", err);
+            requestMemoryModelDialog();
+            this.isChatBusy = false;
+            const event: InteractionEvent = {
+                hitArea: gesture.hitArea,
+                gesture: gesture.gesture,
+                isCombo: gesture.gesture === "rapid_tap",
+            };
+            this.broadcast(event);
+            return event;
+        }
 
         // Format message based on gesture type
         const message = this.formatGestureMessage(gesture);

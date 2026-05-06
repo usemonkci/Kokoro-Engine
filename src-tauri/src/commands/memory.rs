@@ -105,3 +105,23 @@ pub async fn update_memory_tier(
         .await
         .map_err(|e| KokoroError::Database(e.to_string()))
 }
+
+#[tauri::command]
+pub async fn get_memory_embedding_model_status(
+) -> Result<crate::ai::memory::MemoryEmbeddingModelStatus, KokoroError> {
+    Ok(crate::ai::memory::memory_embedding_model_status())
+}
+
+#[tauri::command]
+pub async fn download_memory_embedding_model(
+    app: tauri::AppHandle,
+) -> Result<crate::ai::memory::MemoryEmbeddingModelStatus, KokoroError> {
+    use tauri::Emitter;
+
+    crate::ai::memory::download_memory_embedding_model(move |progress| {
+        app.emit("memory:embedding-model-progress", &progress)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(KokoroError::Internal)
+}

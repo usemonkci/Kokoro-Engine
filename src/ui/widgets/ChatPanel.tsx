@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useDeferredValue, memo } from
 import { motion, AnimatePresence } from "framer-motion";
 import { clsx } from "clsx";
 import { Send, Trash2, AlertCircle, MessageCircle, ChevronLeft, ImagePlus, X, Mic, MicOff, History, Maximize2, Minimize2 } from "lucide-react";
-import { streamChat, onChatTurnStart, onChatTurnDelta, onChatTurnFinish, onChatError, onChatWarning, onChatFailure, onChatTurnTranslation, clearHistory, uploadVisionImage, synthesize, onChatTurnTool, listConversations, loadConversation, onTelegramChatSync, deleteLastMessages, approveToolApproval, rejectToolApproval } from "../../lib/kokoro-bridge";
+import { streamChat, onChatTurnStart, onChatTurnDelta, onChatTurnFinish, onChatError, onChatWarning, onChatFailure, onChatTurnTranslation, clearHistory, uploadVisionImage, synthesize, onChatTurnTool, listConversations, loadConversation, onTelegramChatSync, deleteLastMessages, approveToolApproval, rejectToolApproval, getMemoryEmbeddingModelStatus } from "../../lib/kokoro-bridge";
 import type { FailureEvent, ToolTraceItem } from "../../lib/kokoro-bridge";
 import { getLatestCameraFrame } from "../../lib/camera-frame-cache";
 import { listen } from "@tauri-apps/api/event";
@@ -12,6 +12,7 @@ import ConversationSidebar from "./ConversationSidebar";
 import { ChatMessage } from "./ChatMessage";
 import { buildChatMessagesFromConversation } from "./chat-history";
 import { getStreamingRevealText, hasActiveKokoroBubble, hasVisibleAssistantContent, shouldRenderTypingIndicator, shouldRevealLiveTurnToolTrace } from "./chat-streaming-state";
+import { requestMemoryModelDialog } from "../../lib/memory-model-gate";
 
 // ── Types ──────────────────────────────────────────────────
 interface ChatMessage {
@@ -677,6 +678,28 @@ export default function ChatPanel() {
     // Store last failed request for retry
     const lastFailedRequestRef = useRef<{ message: string; images?: string[]; allowImageGen?: boolean } | null>(null);
 
+    const ensureMemoryModelReady = useCallback(async (options?: { silent?: boolean }) => {
+        try {
+            const status = await getMemoryEmbeddingModelStatus();
+            if (status.installed) {
+                return true;
+            }
+        } catch (err) {
+            console.error("[ChatPanel] Failed to query memory model status:", err);
+            if (!options?.silent) {
+                setError(t("chat.errors.memory_model_check_failed"));
+            }
+            requestMemoryModelDialog();
+            return false;
+        }
+
+        if (!options?.silent) {
+            setError(t("chat.errors.memory_model_required"));
+        }
+        requestMemoryModelDialog();
+        return false;
+    }, [t]);
+
     // Vision Mode
     const [visionEnabled, setVisionEnabled] = useState(() => localStorage.getItem("kokoro_vision_enabled") === "true");
     const [cameraEnabled, setCameraEnabled] = useState(() => {
@@ -732,34 +755,41 @@ export default function ChatPanel() {
         if (!trimmed) return;
 
         if (sttAutoSend) {
-            // Auto-send: inject directly into chat
-            setInput("");
-            setMessages(prev => [...prev, { role: "user", text: trimmed }]);
-            startStreaming();
-            setIsThinking(true);
-            userScrolledRef.current = false;
+            void (async () => {
+                if (!await ensureMemoryModelReady()) {
+                    setInput(trimmed);
+                    return;
+                }
 
-            const allowImageGen = (() => {
-                try {
-                    const bgConfig = JSON.parse(localStorage.getItem("kokoro_bg_config") || "{}");
-                    return bgConfig.mode === "generated";
-                } catch { return false; }
+                // Auto-send: inject directly into chat
+                setInput("");
+                setMessages(prev => [...prev, { role: "user", text: trimmed }]);
+                startStreaming();
+                setIsThinking(true);
+                userScrolledRef.current = false;
+
+                const allowImageGen = (() => {
+                    try {
+                        const bgConfig = JSON.parse(localStorage.getItem("kokoro_bg_config") || "{}");
+                        return bgConfig.mode === "generated";
+                    } catch { return false; }
+                })();
+
+                streamChat({
+                    message: trimmed,
+                    allow_image_gen: allowImageGen,
+                    character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
+                }).catch(err => {
+                    stopStreaming();
+                    setIsThinking(false);
+                    setError(err instanceof Error ? err.message : String(err));
+                });
             })();
-
-            streamChat({
-                message: trimmed,
-                allow_image_gen: allowImageGen,
-                character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
-            }).catch(err => {
-                stopStreaming();
-                setIsThinking(false);
-                setError(err instanceof Error ? err.message : String(err));
-            });
         } else {
             // Fill input box for user review
             setInput(trimmed);
         }
-    }, [sttAutoSend, startStreaming, stopStreaming]);
+    }, [ensureMemoryModelReady, sttAutoSend, startStreaming, stopStreaming]);
 
     const { state: voiceState, volume: micVolume, partialText: sttPartialText, start: startVoice, stop: stopVoice } = useVoiceInput(handleTranscription);
 
@@ -1064,36 +1094,42 @@ export default function ChatPanel() {
             // Listen for proactive triggers from backend (heartbeat)
             const unProactive = await listen<any>("proactive-trigger", (event) => {
                 if (aborted || isStreamingRef.current) return;
-                console.log("[ChatPanel] Proactive trigger:", event.payload);
+                void (async () => {
+                    if (!await ensureMemoryModelReady({ silent: true })) {
+                        return;
+                    }
 
-                const { instruction } = event.payload;
+                    console.log("[ChatPanel] Proactive trigger:", event.payload);
 
-                // Start streaming — compose_prompt() handles full context (system prompt, memory, emotion, history, language)
-                startStreaming();
-                setIsThinking(true);
-                userScrolledRef.current = false;
-                resetReveal();
-                rawResponseRef.current = "";
-                currentTurnRef.current = null;
+                    const { instruction } = event.payload;
 
-                streamChat({
-                    message: instruction,
-                    hidden: true,
-                    character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
-                }).catch(err => {
-                    stopStreaming();
-                    setIsThinking(false);
-                    setError(err instanceof Error ? err.message : String(err));
+                    // Start streaming — compose_prompt() handles full context (system prompt, memory, emotion, history, language)
+                    startStreaming();
+                    setIsThinking(true);
+                    userScrolledRef.current = false;
+                    resetReveal();
+                    rawResponseRef.current = "";
                     currentTurnRef.current = null;
-                    // Remove the empty placeholder if one was created by delta handler
-                    setMessages(prev => {
-                        const last = prev[prev.length - 1];
-                        if (last && last.role === "kokoro" && !last.text) {
-                            return prev.slice(0, -1);
-                        }
-                        return prev;
+
+                    streamChat({
+                        message: instruction,
+                        hidden: true,
+                        character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
+                    }).catch(err => {
+                        stopStreaming();
+                        setIsThinking(false);
+                        setError(err instanceof Error ? err.message : String(err));
+                        currentTurnRef.current = null;
+                        // Remove the empty placeholder if one was created by delta handler
+                        setMessages(prev => {
+                            const last = prev[prev.length - 1];
+                            if (last && last.role === "kokoro" && !last.text) {
+                                return prev.slice(0, -1);
+                            }
+                            return prev;
+                        });
                     });
-                });
+                })();
             });
             cleanups.push(() => unProactive());
 
@@ -1136,6 +1172,7 @@ export default function ChatPanel() {
         const trimmed = input.trim();
         const messageImages = visionEnabled ? [...pendingImages] : [];
         if ((!trimmed && messageImages.length === 0) || isStreaming) return;
+        if (!await ensureMemoryModelReady()) return;
 
         setMessages(prev => [...prev, { role: "user", text: trimmed, images: messageImages.length > 0 ? messageImages : undefined }]);
         const cameraFrame = visionEnabled ? getLatestCameraFrame() : null;
@@ -1295,6 +1332,7 @@ export default function ChatPanel() {
         if (lastUserIndex === -1) return;
         const userMsgIndex = globalIndex - 1 - lastUserIndex;
         const userMsg = msgs[userMsgIndex];
+        if (!await ensureMemoryModelReady()) return;
 
         const messagesToDelete = msgs.length - globalIndex;
 
@@ -1330,7 +1368,7 @@ export default function ChatPanel() {
             setIsThinking(false);
             setError(err instanceof Error ? err.message : String(err));
         });
-    }, [startStreaming, stopStreaming, resetReveal, setError]);
+    }, [ensureMemoryModelReady, startStreaming, stopStreaming, resetReveal, setError]);
 
     const onContinueFrom = useCallback(async (globalIndex: number) => {
         const msgs = messagesRef.current;
