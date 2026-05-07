@@ -172,6 +172,8 @@ pub struct TurnCancellationState {
     cancelled: RwLock<HashMap<String, Option<String>>>,
 }
 
+const TURN_CANCELLED_BY_USER_MESSAGE: &str = "turn cancelled by user";
+
 impl TurnCancellationState {
     pub fn new() -> Self {
         Self::default()
@@ -184,7 +186,7 @@ impl TurnCancellationState {
 
     async fn ensure_turn_not_cancelled(&self, turn_id: &str) -> Result<(), String> {
         if self.is_cancelled(turn_id).await {
-            return Err("turn cancelled by user".to_string());
+            return Err(TURN_CANCELLED_BY_USER_MESSAGE.to_string());
         }
         Ok(())
     }
@@ -241,6 +243,10 @@ async fn build_turn_delta_payload_if_not_cancelled(
     state
         .build_turn_delta_payload_if_not_cancelled(turn_id, delta)
         .await
+}
+
+fn is_turn_cancelled_error_message(message: &str) -> bool {
+    message == TURN_CANCELLED_BY_USER_MESSAGE
 }
 
 struct TurnCancellationGuard {
@@ -1536,6 +1542,7 @@ pub async fn stream_chat(
     let _turn_guard =
         TurnCancellationGuard::new(cancel_state.inner().clone(), assistant_turn_id.clone());
 
+    let stream_result: Result<(), KokoroError> = async {
     let mut before_llm_request_payload = build_before_llm_request_payload(
         conversation_id.clone(),
         &char_id,
@@ -2171,39 +2178,58 @@ pub async fn stream_chat(
             .await;
     }
 
+    let user_lang = state.user_language.lock().await.clone();
+    let resp_lang = state.response_language.lock().await.clone();
+    let translation_pending = all_translations.is_empty()
+        && !full_response.is_empty()
+        && !user_lang.is_empty()
+        && !resp_lang.is_empty()
+        && user_lang != resp_lang;
+
+    app.emit(
+        "chat-turn-text-complete",
+        serde_json::json!({
+            "turn_id": assistant_turn_id,
+            "text": full_response.clone(),
+            "translation_pending": translation_pending,
+            "translation": if all_translations.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(all_translations.join(" "))
+            },
+        }),
+    )
+    .map_err(|e| KokoroError::Chat(e.to_string()))?;
+
     // Fallback translation: if main LLM missed the [TRANSLATE:...] tag, use system LLM to fill in
-    if all_translations.is_empty() && !full_response.is_empty() {
-        let user_lang = state.user_language.lock().await.clone();
-        let resp_lang = state.response_language.lock().await.clone();
+    if translation_pending {
         tracing::info!(
             target: "chat",
             "[Chat] Fallback check: user_lang={:?}, resp_lang={:?}",
             user_lang, resp_lang
         );
-        if !user_lang.is_empty() && !resp_lang.is_empty() && user_lang != resp_lang {
-            tracing::info!(
-                target: "chat",
-                "[Chat] Translation missing, triggering fallback translation into {}",
+        tracing::info!(
+            target: "chat",
+            "[Chat] Translation missing, triggering fallback translation into {}",
+            user_lang
+        );
+        let fallback_messages = vec![
+            system_message(format!(
+                "You are a translator. Translate the following text into {}. Output only the translation, nothing else.",
                 user_lang
-            );
-            let fallback_messages = vec![
-                system_message(format!(
-                    "You are a translator. Translate the following text into {}. Output only the translation, nothing else.",
-                    user_lang
-                )),
-                user_text_message(full_response.clone()),
-            ];
-            match system_provider.chat(fallback_messages, None).await {
-                Ok(translation) => {
-                    let t = translation.trim().to_string();
-                    if !t.is_empty() {
-                        tracing::info!(target: "chat", "[Chat] Fallback translation succeeded ({} chars)", t.len());
-                        all_translations.push(t);
-                    }
+            )),
+            user_text_message(full_response.clone()),
+        ];
+        match system_provider.chat(fallback_messages, None).await {
+            Ok(translation) => {
+                let t = translation.trim().to_string();
+                if !t.is_empty() {
+                    tracing::info!(target: "chat", "[Chat] Fallback translation succeeded ({} chars)", t.len());
+                    all_translations.push(t);
                 }
-                Err(e) => {
-                    tracing::error!(target: "chat", "[Chat] Fallback translation failed: {}", e);
-                }
+            }
+            Err(e) => {
+                tracing::error!(target: "chat", "[Chat] Fallback translation failed: {}", e);
             }
         }
     }
@@ -2566,6 +2592,29 @@ pub async fn stream_chat(
     .map_err(|e| KokoroError::Chat(e.to_string()))?;
 
     Ok(())
+    }
+    .await;
+
+    match stream_result {
+        Ok(()) => Ok(()),
+        Err(KokoroError::Chat(message)) if is_turn_cancelled_error_message(&message) => {
+            tracing::info!(
+                target: "chat",
+                "[Chat] Turn {} cancelled by user",
+                assistant_turn_id
+            );
+            app.emit(
+                "chat-turn-finish",
+                serde_json::json!({
+                    "turn_id": assistant_turn_id,
+                    "status": "cancelled",
+                }),
+            )
+            .map_err(|e| KokoroError::Chat(e.to_string()))?;
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]

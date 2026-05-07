@@ -109,6 +109,13 @@
                 "toggle": "네이티브 tool calling 사용",
                 "desc": "가짜 [TOOL_CALL:...] 태그 대신 현재 model/provider 의 네이티브 tool calling 인터페이스를 사용합니다."
             },
+            "connection_test": {
+                "button": "연결 테스트",
+                "testing": "테스트 중...",
+                "success": "연결 정상",
+                "active_role": "메인",
+                "system_role": "시스템"
+            },
             "save_config": "LLM 설정 저장",
             "saving": "저장 중...",
             "vision_mode": "이미지 전송",
@@ -834,7 +841,8 @@
         },
         "translation": {
             "hide": "번역 숨기기",
-            "show": "번역 보기"
+            "show": "번역 보기",
+            "pending": "번역 중..."
         },
         "actions": {
             "continue_from": "여기서부터 계속",
@@ -845,7 +853,9 @@
             "clear": "대화 지우기",
             "collapse": "채팅 접기",
             "open": "채팅 열기",
-            "retry": "재시도"
+            "retry": "재시도",
+            "stop": "생성 중지",
+            "stopping": "중지하는 중..."
         },
         "errors": {
             "image_too_large": "이미지가 너무 큽니다 (최대 5MB)",

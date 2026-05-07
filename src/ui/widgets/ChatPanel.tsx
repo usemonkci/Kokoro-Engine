@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useDeferredValue, memo } from
 import { motion, AnimatePresence } from "framer-motion";
 import { clsx } from "clsx";
 import { Send, Trash2, AlertCircle, MessageCircle, ChevronLeft, ImagePlus, X, Mic, MicOff, History, Maximize2, Minimize2 } from "lucide-react";
-import { streamChat, onChatTurnStart, onChatTurnDelta, onChatTurnFinish, onChatError, onChatWarning, onChatFailure, onChatTurnTranslation, clearHistory, uploadVisionImage, synthesize, onChatTurnTool, listConversations, loadConversation, onTelegramChatSync, deleteLastMessages, approveToolApproval, rejectToolApproval, getMemoryEmbeddingModelStatus } from "../../lib/kokoro-bridge";
+import { streamChat, cancelChatTurn, onChatTurnStart, onChatTurnDelta, onChatTurnFinish, onChatTurnTextComplete, onChatError, onChatWarning, onChatFailure, onChatTurnTranslation, clearHistory, uploadVisionImage, synthesize, onChatTurnTool, listConversations, loadConversation, onTelegramChatSync, deleteLastMessages, approveToolApproval, rejectToolApproval, getMemoryEmbeddingModelStatus } from "../../lib/kokoro-bridge";
 import type { FailureEvent, ToolTraceItem } from "../../lib/kokoro-bridge";
 import { getLatestCameraFrame } from "../../lib/camera-frame-cache";
 import { listen } from "@tauri-apps/api/event";
@@ -20,6 +20,7 @@ interface ChatMessage {
     text: string;
     images?: string[];
     translation?: string;
+    translationPending?: boolean;
     isError?: boolean;
     tools?: ToolTraceItem[];
 }
@@ -30,6 +31,7 @@ interface PendingTurnState {
     rawText: string;
     visibleTextStarted: boolean;
     translation?: string;
+    translationPending: boolean;
     tools: ToolTraceItem[];
 }
 
@@ -539,6 +541,21 @@ function getToolEventStateUpdate(event: {
     return (prev: Array<ChatMessage>) => updateUiForToolEvent(prev, turn, eventTurnId, event);
 }
 
+function getAsyncErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    if (typeof error === "object" && error !== null && "message" in error && typeof (error as { message?: unknown }).message === "string") {
+        return (error as { message: string }).message;
+    }
+    return String(error);
+}
+
+function isTurnCancelledError(error: unknown): boolean {
+    const message = getAsyncErrorMessage(error).toLowerCase();
+    return message.includes("turn cancelled by user") || message.includes("turn canceled by user");
+}
+
 
 // ── Typing Indicator ───────────────────────────────────────
 function TypingIndicator() {
@@ -634,6 +651,10 @@ export default function ChatPanel() {
     const expandedTextareaRef = useRef<HTMLTextAreaElement>(null);
     const [isStreaming, setIsStreaming] = useState(false);
     const isStreamingRef = useRef(false);
+    const [isBusy, setIsBusy] = useState(false);
+    const isBusyRef = useRef(false);
+    const [isStopping, setIsStopping] = useState(false);
+    const cancelRequestedRef = useRef(false);
     const messagesRef = useRef<ChatMessage[]>([]);
     const [isThinking, setIsThinking] = useState(false);
 
@@ -641,12 +662,25 @@ export default function ChatPanel() {
     const [expandedTranslations, setExpandedTranslations] = useState<Set<number>>(new Set());
 
     const startStreaming = useCallback(() => {
+        cancelRequestedRef.current = false;
+        setIsStopping(false);
+        isBusyRef.current = true;
+        setIsBusy(true);
         isStreamingRef.current = true;
         setIsStreaming(true);
     }, []);
     const stopStreaming = useCallback(() => {
+        setIsStopping(false);
         isStreamingRef.current = false;
         setIsStreaming(false);
+    }, []);
+    const endTurnActivity = useCallback(() => {
+        cancelRequestedRef.current = false;
+        setIsStopping(false);
+        isStreamingRef.current = false;
+        setIsStreaming(false);
+        isBusyRef.current = false;
+        setIsBusy(false);
     }, []);
 
     // Raw (unfiltered) full response text — accumulated from all deltas
@@ -710,6 +744,34 @@ export default function ChatPanel() {
 
     // 对话历史侧边栏
     const [sidebarOpen, setSidebarOpen] = useState(false);
+
+    const requestTurnCancellation = useCallback(async (turnId: string) => {
+        try {
+            await cancelChatTurn(turnId, "stopped_from_chat_panel");
+        } catch (error) {
+            if (!isTurnCancelledError(error)) {
+                endTurnActivity();
+                currentTurnRef.current = null;
+                setIsThinking(false);
+                setError(getAsyncErrorMessage(error));
+            }
+        }
+    }, [endTurnActivity]);
+
+    const handleStopGeneration = useCallback(() => {
+        if (!isStreamingRef.current || isStopping) {
+            return;
+        }
+
+        cancelRequestedRef.current = true;
+        setIsStopping(true);
+        setIsThinking(false);
+
+        const activeTurnId = currentTurnRef.current?.turnId;
+        if (activeTurnId) {
+            void requestTurnCancellation(activeTurnId);
+        }
+    }, [isStopping, requestTurnCancellation]);
 
     // 自动恢复最近对话
     useEffect(() => {
@@ -780,16 +842,23 @@ export default function ChatPanel() {
                     allow_image_gen: allowImageGen,
                     character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
                 }).catch(err => {
-                    stopStreaming();
+                    if (isTurnCancelledError(err) || cancelRequestedRef.current) {
+                        endTurnActivity();
+                        currentTurnRef.current = null;
+                        setIsThinking(false);
+                        return;
+                    }
+                    endTurnActivity();
+                    currentTurnRef.current = null;
                     setIsThinking(false);
-                    setError(err instanceof Error ? err.message : String(err));
+                    setError(getAsyncErrorMessage(err));
                 });
             })();
         } else {
             // Fill input box for user review
             setInput(trimmed);
         }
-    }, [ensureMemoryModelReady, sttAutoSend, startStreaming, stopStreaming]);
+    }, [endTurnActivity, ensureMemoryModelReady, sttAutoSend, startStreaming]);
 
     const { state: voiceState, volume: micVolume, partialText: sttPartialText, start: startVoice, stop: stopVoice } = useVoiceInput(handleTranscription);
 
@@ -807,6 +876,7 @@ export default function ChatPanel() {
     useWakeWord({
         enabled:
             sttEnabled &&
+            !isBusy &&
             voiceState === VoiceState.Idle &&
             (continuousListening || (wakeWordEnabled && !!wakeWord)),
         mode: continuousListening ? "speech" : "wake_word",
@@ -937,15 +1007,19 @@ export default function ChatPanel() {
                     rawText: "",
                     visibleTextStarted: false,
                     translation: undefined,
+                    translationPending: false,
                     tools: [],
                 };
                 rawResponseRef.current = "";
+                if (cancelRequestedRef.current) {
+                    void requestTurnCancellation(turn_id);
+                }
             });
             if (aborted) { unTurnStart(); return; }
             cleanups.push(unTurnStart);
 
             const unDelta = await onChatTurnDelta(({ turn_id, delta: rawDelta }) => {
-                if (aborted || !isStreamingRef.current) return;
+                if (aborted || !isStreamingRef.current || cancelRequestedRef.current) return;
                 const turn = currentTurnRef.current;
                 if (!turn || turn.turnId !== turn_id) return;
 
@@ -973,11 +1047,54 @@ export default function ChatPanel() {
             if (aborted) { unDelta(); return; }
             cleanups.push(unDelta);
 
+            const unTextComplete = await onChatTurnTextComplete(({ turn_id, text, translation_pending, translation }) => {
+                if (aborted || cancelRequestedRef.current) return;
+                const turn = currentTurnRef.current;
+                if (!turn || turn.turnId !== turn_id) return;
+
+                turn.rawText = text;
+                if (translation) {
+                    turn.translation = translation;
+                }
+                turn.translationPending = translation_pending;
+                rawResponseRef.current = text;
+
+                flushReveal();
+                stopStreaming();
+                setIsThinking(false);
+                userScrolledRef.current = false;
+
+                const cleanText = stripStoredMarkup(text);
+                const hasContent = hasVisibleAssistantContent(cleanText) || turn.tools.length > 0;
+                if (!hasContent) {
+                    return;
+                }
+
+                setMessages(prev => {
+                    const ensured = ensureTurnMessage(prev, turn);
+                    return updateTurnMessage(ensured, turn, (current) => ({
+                        ...current,
+                        text: cleanText,
+                        translation: turn.translation,
+                        translationPending: translation_pending,
+                        tools: turn.tools.length > 0 ? [...turn.tools] : undefined,
+                    }));
+                });
+            });
+            if (aborted) { unTextComplete(); return; }
+            cleanups.push(unTextComplete);
+
             const unTranslation = await onChatTurnTranslation(({ turn_id, translation }) => {
-                if (aborted) return;
+                if (aborted || cancelRequestedRef.current) return;
                 const turn = currentTurnRef.current;
                 if (!turn || turn.turnId !== turn_id) return;
                 turn.translation = translation;
+                turn.translationPending = false;
+                setMessages(prev => updateTurnMessage(prev, turn, (current) => ({
+                    ...current,
+                    translation,
+                    translationPending: false,
+                })));
             });
             if (aborted) { unTranslation(); return; }
             cleanups.push(unTranslation);
@@ -988,7 +1105,7 @@ export default function ChatPanel() {
                 if (!turn || turn.turnId !== turn_id) return;
 
                 flushReveal();
-                stopStreaming();
+                endTurnActivity();
                 setIsThinking(false);
                 userScrolledRef.current = false;
 
@@ -1000,7 +1117,7 @@ export default function ChatPanel() {
                     const hasContent = hasVisibleAssistantContent(cleanText) || turn.tools.length > 0;
 
                     if (hasActiveKokoroBubble(prev, turn.messageIndex)) {
-                        if (!hasContent && status === "error") {
+                        if (!hasContent && (status === "error" || status === "cancelled")) {
                             return [...prev.slice(0, turn.messageIndex!), ...prev.slice(turn.messageIndex! + 1)];
                         }
 
@@ -1008,6 +1125,7 @@ export default function ChatPanel() {
                             ...current,
                             text: cleanText,
                             translation: turn.translation,
+                            translationPending: false,
                             tools: turn.tools.length > 0 ? [...turn.tools] : undefined,
                         }));
                     }
@@ -1017,6 +1135,7 @@ export default function ChatPanel() {
                             role: "kokoro",
                             text: cleanText,
                             translation: turn.translation,
+                            translationPending: false,
                             tools: turn.tools.length > 0 ? [...turn.tools] : undefined,
                         }];
                     }
@@ -1026,7 +1145,7 @@ export default function ChatPanel() {
 
                 currentTurnRef.current = null;
 
-                if (localStorage.getItem("kokoro_tts_enabled") === "true" && cleanText.trim()) {
+                if (status === "completed" && localStorage.getItem("kokoro_tts_enabled") === "true" && cleanText.trim()) {
                     console.log("[TTS] Auto-speak triggered, text length:", cleanText.length);
                     synthesize(cleanText.trim(), {
                         provider_id: localStorage.getItem("kokoro_tts_provider") || undefined,
@@ -1041,7 +1160,7 @@ export default function ChatPanel() {
 
             const unFailure = await onChatFailure((failure: FailureEvent) => {
                 if (aborted) return;
-                stopStreaming();
+                endTurnActivity();
                 setIsThinking(false);
                 const suffix = failure.stage ? ` (${failure.stage})` : "";
                 setError(`${failure.message}${suffix}`);
@@ -1052,7 +1171,7 @@ export default function ChatPanel() {
 
             const unError = await onChatError((err: string) => {
                 if (aborted) return;
-                stopStreaming();
+                endTurnActivity();
                 setIsThinking(false);
                 setError(err);
                 currentTurnRef.current = null;
@@ -1068,7 +1187,7 @@ export default function ChatPanel() {
             cleanups.push(unWarning);
 
             const unToolResult = await onChatTurnTool((event) => {
-                if (aborted) return;
+                if (aborted || cancelRequestedRef.current) return;
                 logToolEvent(event);
                 const turn = currentTurnRef.current;
                 setMessages(prev => getToolEventStateUpdate(event, turn, event.turn_id)(prev));
@@ -1093,7 +1212,7 @@ export default function ChatPanel() {
 
             // Listen for proactive triggers from backend (heartbeat)
             const unProactive = await listen<any>("proactive-trigger", (event) => {
-                if (aborted || isStreamingRef.current) return;
+                if (aborted || isBusyRef.current) return;
                 void (async () => {
                     if (!await ensureMemoryModelReady({ silent: true })) {
                         return;
@@ -1116,9 +1235,14 @@ export default function ChatPanel() {
                         hidden: true,
                         character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
                     }).catch(err => {
-                        stopStreaming();
+                        if (isTurnCancelledError(err) || cancelRequestedRef.current) {
+                            endTurnActivity();
+                            currentTurnRef.current = null;
+                            return;
+                        }
+                        endTurnActivity();
                         setIsThinking(false);
-                        setError(err instanceof Error ? err.message : String(err));
+                        setError(getAsyncErrorMessage(err));
                         currentTurnRef.current = null;
                         // Remove the empty placeholder if one was created by delta handler
                         setMessages(prev => {
@@ -1136,7 +1260,7 @@ export default function ChatPanel() {
             // Listen for interaction triggers (touch/click on Live2D model)
             // interaction-service already calls streamChat, we just need to prepare ChatPanel for receiving deltas
             const unInteraction = await listen<any>("interaction-trigger", () => {
-                if (aborted || isStreamingRef.current) return;
+                if (aborted || isBusyRef.current) return;
 
                 startStreaming();
                 setIsThinking(true);
@@ -1149,7 +1273,7 @@ export default function ChatPanel() {
 
             // Listen for voice-interrupt-stt: when TTS is interrupted by voice, auto-start STT
             const unVoiceInterruptStt = await listen<any>("voice-interrupt-stt", () => {
-                if (aborted || isStreamingRef.current) return;
+                if (aborted || isBusyRef.current) return;
                 if (!sttEnabledRef.current || !sttAutoSendRef.current) return;
                 console.log("[ChatPanel] Voice interrupt → starting STT");
                 startVoiceRef.current({ autoStopOnSilence: true });
@@ -1171,7 +1295,7 @@ export default function ChatPanel() {
         e?.preventDefault();
         const trimmed = input.trim();
         const messageImages = visionEnabled ? [...pendingImages] : [];
-        if ((!trimmed && messageImages.length === 0) || isStreaming) return;
+        if ((!trimmed && messageImages.length === 0) || isBusy) return;
         if (!await ensureMemoryModelReady()) return;
 
         setMessages(prev => [...prev, { role: "user", text: trimmed, images: messageImages.length > 0 ? messageImages : undefined }]);
@@ -1204,10 +1328,16 @@ export default function ChatPanel() {
                 character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
             });
         } catch (err) {
-            stopStreaming();
+            if (isTurnCancelledError(err) || cancelRequestedRef.current) {
+                endTurnActivity();
+                currentTurnRef.current = null;
+                setIsThinking(false);
+                return;
+            }
+            endTurnActivity();
             currentTurnRef.current = null;
             setIsThinking(false);
-            setError(err instanceof Error ? err.message : String(err));
+            setError(getAsyncErrorMessage(err));
 
             // Save failed request for retry
             lastFailedRequestRef.current = { message: trimmed || "(image attached)", images: imagesToSend.length > 0 ? imagesToSend : undefined, allowImageGen };
@@ -1364,11 +1494,18 @@ export default function ChatPanel() {
             allow_image_gen: allowImageGen,
             character_id: localStorage.getItem("kokoro_active_character_id") || undefined,
         }).catch(err => {
-            stopStreaming();
+            if (isTurnCancelledError(err) || cancelRequestedRef.current) {
+                endTurnActivity();
+                currentTurnRef.current = null;
+                setIsThinking(false);
+                return;
+            }
+            endTurnActivity();
+            currentTurnRef.current = null;
             setIsThinking(false);
-            setError(err instanceof Error ? err.message : String(err));
+            setError(getAsyncErrorMessage(err));
         });
-    }, [ensureMemoryModelReady, startStreaming, stopStreaming, resetReveal, setError]);
+    }, [endTurnActivity, ensureMemoryModelReady, startStreaming, resetReveal, setError]);
 
     const onContinueFrom = useCallback(async (globalIndex: number) => {
         const msgs = messagesRef.current;
@@ -1559,7 +1696,7 @@ export default function ChatPanel() {
                                 key={`${globalIndex}-${msg.role}`}
                                 message={msg}
                                 globalIndex={globalIndex}
-                                isStreaming={isStreaming}
+                                isStreaming={isBusy}
                                 isTranslationExpanded={expandedTranslations.has(globalIndex)}
                                 onToggleTranslation={onToggleTranslation}
                                 onEdit={onEdit}
@@ -1624,11 +1761,11 @@ export default function ChatPanel() {
                             whileHover={{ scale: 1.1 }}
                             whileTap={{ scale: 0.9 }}
                             onClick={() => fileInputRef.current?.click()}
-                            disabled={isStreaming || isUploading}
+                            disabled={isBusy || isUploading}
                             className={clsx(
                                 "p-2.5 rounded-lg transition-colors",
                                 "text-[var(--color-text-muted)] hover:text-[var(--color-accent)]",
-                                (isStreaming || isUploading) && "opacity-50 cursor-not-allowed"
+                                (isBusy || isUploading) && "opacity-50 cursor-not-allowed"
                             )}
                             aria-label={t("chat.input.attach_image")}
                             title={t("chat.input.attach_image")}
@@ -1674,7 +1811,7 @@ export default function ChatPanel() {
                                 whileHover={{ scale: 1.1 }}
                                 whileTap={{ scale: 0.9 }}
                                 onClick={handleMicToggle}
-                                disabled={isStreaming}
+                                disabled={isBusy}
                                 className={clsx(
                                     "relative p-2.5 rounded-lg transition-all z-10",
                                     voiceState === VoiceState.Idle
@@ -1682,9 +1819,9 @@ export default function ChatPanel() {
                                         : voiceState === VoiceState.Listening
                                             ? "text-[var(--color-accent)] bg-[var(--color-accent)]/15 border border-[var(--color-accent)]/30"
                                             : voiceState === VoiceState.Speaking
-                                                ? "text-red-400 bg-red-500/20 border border-red-500/40 shadow-[0_0_12px_rgba(239,68,68,0.3)]"
-                                                : "text-amber-400 bg-amber-500/15 border border-amber-500/30",
-                                    isStreaming && voiceState === VoiceState.Idle && "opacity-50 cursor-not-allowed"
+                                            ? "text-red-400 bg-red-500/20 border border-red-500/40 shadow-[0_0_12px_rgba(239,68,68,0.3)]"
+                                            : "text-amber-400 bg-amber-500/15 border border-amber-500/30",
+                                    isBusy && voiceState === VoiceState.Idle && "opacity-50 cursor-not-allowed"
                                 )}
                                 aria-label={
                                     voiceState === VoiceState.Idle ? t("chat.input.mic.title.idle") :
@@ -1725,18 +1862,19 @@ export default function ChatPanel() {
                             onPaste={handlePaste}
                             data-onboarding-id="chat-input"
                             placeholder={t("chat.input.placeholder")}
-                            disabled={isStreaming}
+                            disabled={isBusy}
                             className={clsx(
                                 "w-full bg-black/40 border border-[var(--color-border)]",
                                 "text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]",
                                 "text-sm rounded-lg pl-4 pr-8 py-2.5 font-body",
                                 "focus:outline-none focus:border-[var(--color-accent)] focus:shadow-[var(--glow-accent)]",
                                 "transition-all",
-                                isStreaming && "opacity-50 cursor-not-allowed"
+                                isBusy && "opacity-50 cursor-not-allowed"
                             )}
                         />
                         <button
                             type="button"
+                            disabled={isBusy}
                             onClick={() => {
                                 setExpandedInput(true);
                                 setTimeout(() => {
@@ -1744,7 +1882,10 @@ export default function ChatPanel() {
                                     if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
                                 }, 50);
                             }}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"
+                            className={clsx(
+                                "absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors",
+                                isBusy && "opacity-50 cursor-not-allowed"
+                            )}
                             aria-label={t("chat.input.expand")}
                             title={t("chat.input.expand")}
                         >
@@ -1755,15 +1896,26 @@ export default function ChatPanel() {
                         whileHover={{ scale: 1.1 }}
                         whileTap={{ scale: 0.9 }}
                         type="submit"
-                        disabled={isStreaming || (!input.trim() && !hasSendableImages)}
+                        onClick={isStreaming ? (e) => {
+                            e.preventDefault();
+                            handleStopGeneration();
+                        } : undefined}
+                        disabled={isStreaming ? isStopping : (isBusy || (!input.trim() && !hasSendableImages))}
                         className={clsx(
                             "p-2.5 rounded-lg transition-colors",
-                            "bg-[var(--color-accent)] text-black hover:bg-white",
-                            (isStreaming || (!input.trim() && !hasSendableImages)) && "opacity-50 cursor-not-allowed"
+                            isStreaming
+                                ? "bg-red-500 text-white hover:bg-red-400"
+                                : "bg-[var(--color-accent)] text-black hover:bg-white",
+                            (isStreaming ? isStopping : (isBusy || (!input.trim() && !hasSendableImages))) && "opacity-50 cursor-not-allowed"
                         )}
-                        aria-label="Send message"
+                        aria-label={isStreaming ? t("chat.actions.stop") : "Send message"}
+                        title={isStreaming ? (isStopping ? t("chat.actions.stopping") : t("chat.actions.stop")) : undefined}
                     >
-                        <Send size={16} strokeWidth={1.5} />
+                        {isStreaming ? (
+                            <X size={16} strokeWidth={1.8} />
+                        ) : (
+                            <Send size={16} strokeWidth={1.5} />
+                        )}
                     </motion.button>
                 </div>
             </form>
@@ -1791,14 +1943,15 @@ export default function ChatPanel() {
                                 if (e.key === "Escape") setExpandedInput(false);
                             }}
                             placeholder={t("chat.input.placeholder")}
-                            disabled={isStreaming}
+                            disabled={isBusy}
                             rows={6}
                             className={clsx(
                                 "w-full bg-black/40 border border-[var(--color-border)] rounded-lg",
                                 "text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]",
                                 "text-sm px-4 py-3 font-body resize-none",
                                 "focus:outline-none focus:border-[var(--color-accent)] focus:shadow-[var(--glow-accent)]",
-                                "transition-all"
+                                "transition-all",
+                                isBusy && "opacity-50 cursor-not-allowed"
                             )}
                         />
                         <div className="flex items-center justify-between mt-2">
@@ -1818,16 +1971,34 @@ export default function ChatPanel() {
                                     type="button"
                                     whileHover={{ scale: 1.05 }}
                                     whileTap={{ scale: 0.95 }}
-                                    onClick={() => { setExpandedInput(false); handleSend(); }}
-                                    disabled={isStreaming || !input.trim()}
+                                    onClick={() => {
+                                        if (isStreaming) {
+                                            handleStopGeneration();
+                                            return;
+                                        }
+                                        setExpandedInput(false);
+                                        handleSend();
+                                    }}
+                                    disabled={isStreaming ? isStopping : (isBusy || !input.trim())}
                                     className={clsx(
                                         "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
-                                        "bg-[var(--color-accent)] text-black hover:bg-white",
-                                        (isStreaming || !input.trim()) && "opacity-50 cursor-not-allowed"
+                                        isStreaming
+                                            ? "bg-red-500 text-white hover:bg-red-400"
+                                            : "bg-[var(--color-accent)] text-black hover:bg-white",
+                                        (isStreaming ? isStopping : (isBusy || !input.trim())) && "opacity-50 cursor-not-allowed"
                                     )}
                                 >
-                                    <Send size={12} strokeWidth={1.5} />
-                                    发送
+                                    {isStreaming ? (
+                                        <>
+                                            <X size={12} strokeWidth={1.8} />
+                                            {isStopping ? t("chat.actions.stopping") : t("chat.actions.stop")}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Send size={12} strokeWidth={1.5} />
+                                            发送
+                                        </>
+                                    )}
                                 </motion.button>
                             </div>
                         </div>

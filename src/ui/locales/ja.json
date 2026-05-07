@@ -109,6 +109,13 @@
                 "toggle": "ネイティブ tool calling を有効化",
                 "desc": "疑似的な [TOOL_CALL:...] タグではなく、現在の model/provider のネイティブ tool calling を使います。"
             },
+            "connection_test": {
+                "button": "接続テスト",
+                "testing": "テスト中...",
+                "success": "接続 OK",
+                "active_role": "メイン",
+                "system_role": "システム"
+            },
             "save_config": "LLM 設定を保存",
             "saving": "保存中...",
             "vision_mode": "画像送信",
@@ -834,7 +841,8 @@
         },
         "translation": {
             "hide": "翻訳を隠す",
-            "show": "翻訳を表示"
+            "show": "翻訳を表示",
+            "pending": "翻訳中..."
         },
         "actions": {
             "continue_from": "ここから続ける",
@@ -845,7 +853,9 @@
             "clear": "会話をクリア",
             "collapse": "チャットを折りたたむ",
             "open": "チャットを開く",
-            "retry": "再試行"
+            "retry": "再試行",
+            "stop": "生成を停止",
+            "stopping": "停止中..."
         },
         "errors": {
             "image_too_large": "画像が大きすぎます (最大 5MB)",

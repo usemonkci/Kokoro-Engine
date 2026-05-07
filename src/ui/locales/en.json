@@ -109,6 +109,13 @@
                 "toggle": "Enable native tool calling",
                 "desc": "Use the model/provider's native tool calling interface instead of pseudo [TOOL_CALL:...] tags."
             },
+            "connection_test": {
+                "button": "Test Connection",
+                "testing": "Testing...",
+                "success": "Connection OK",
+                "active_role": "Active",
+                "system_role": "System"
+            },
             "save_config": "Save LLM Config",
             "saving": "Saving...",
             "vision_mode": "Image Sending",
@@ -834,7 +841,8 @@
         },
         "translation": {
             "hide": "Hide Translation",
-            "show": "Show Translation"
+            "show": "Show Translation",
+            "pending": "Translating..."
         },
         "actions": {
             "continue_from": "Continue from here",
@@ -845,7 +853,9 @@
             "clear": "Clear conversation",
             "collapse": "Collapse chat",
             "open": "Open chat",
-            "retry": "Retry"
+            "retry": "Retry",
+            "stop": "Stop generation",
+            "stopping": "Stopping..."
         },
         "errors": {
             "image_too_large": "Image too large (max 5MB)",

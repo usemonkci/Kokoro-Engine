@@ -109,6 +109,13 @@
                 "toggle": "启用原生工具调用",
                 "desc": "使用当前 model/provider 的原生 tool calling 接口，而不是伪造的 [TOOL_CALL:...] 标签。"
             },
+            "connection_test": {
+                "button": "测试连接",
+                "testing": "测试中...",
+                "success": "连接正常",
+                "active_role": "主模型",
+                "system_role": "系统模型"
+            },
             "save_config": "保存 LLM 配置",
             "saving": "保存中...",
             "vision_mode": "图片发送",
@@ -834,7 +841,8 @@
         },
         "translation": {
             "hide": "隐藏翻译",
-            "show": "显示翻译"
+            "show": "显示翻译",
+            "pending": "翻译中..."
         },
         "actions": {
             "continue_from": "从这里继续",
@@ -845,7 +853,9 @@
             "clear": "清空对话",
             "collapse": "折叠对话",
             "open": "展开对话",
-            "retry": "重试"
+            "retry": "重试",
+            "stop": "停止生成",
+            "stopping": "正在停止..."
         },
         "errors": {
             "image_too_large": "图片过大 (最大 5MB)",

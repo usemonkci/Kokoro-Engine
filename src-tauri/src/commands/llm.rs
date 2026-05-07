@@ -5,7 +5,7 @@ use crate::llm::anthropic::{AnthropicModelInfo, AnthropicProvider};
 use crate::llm::llama_cpp::{LlamaCppProvider, LlamaCppStatus};
 use crate::llm::llm_config::LlmConfig;
 use crate::llm::ollama::{OllamaModelInfo, OllamaProvider};
-use crate::llm::service::LlmService;
+use crate::llm::service::{test_config_connection, LlmConnectionTestResult, LlmService};
 use tauri::State;
 
 #[tauri::command]
@@ -19,6 +19,13 @@ pub async fn save_llm_config(
     state: State<'_, LlmService>,
 ) -> Result<(), KokoroError> {
     state.update_config(config).await
+}
+
+#[tauri::command]
+pub async fn test_llm_connection(
+    config: LlmConfig,
+) -> Result<LlmConnectionTestResult, KokoroError> {
+    test_config_connection(config).await
 }
 
 #[tauri::command]

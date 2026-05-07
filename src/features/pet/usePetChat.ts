@@ -35,7 +35,7 @@ export function usePetChat(): PetChatState {
             }
         });
 
-        const unlistenDone = listen<{ turn_id: string; status: "completed" | "error" }>("chat-turn-finish", (event) => {
+        const unlistenDone = listen<{ turn_id: string; status: "completed" | "error" | "cancelled" }>("chat-turn-finish", (event) => {
             if (activeTurnIdRef.current !== event.payload.turn_id) return;
             setIsStreaming(false);
             if (hideTimerRef.current) clearTimeout(hideTimerRef.current);

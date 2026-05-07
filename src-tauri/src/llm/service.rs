@@ -4,12 +4,17 @@ use crate::error::KokoroError;
 use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::llama_cpp::LlamaCppProvider;
 use crate::llm::llm_config::{LlmConfig, LlmPreset, LlmProviderConfig};
+use crate::llm::messages::user_text_message;
 use crate::llm::ollama::OllamaProvider;
 use crate::llm::provider::{LlmProvider, OpenAIProvider};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
+
+const CONNECTION_TEST_PROMPT: &str = "Reply with the single word OK.";
 
 /// Managed state for LLM access. Holds provider map + active provider id + config.
 #[derive(Clone)]
@@ -18,6 +23,47 @@ pub struct LlmService {
     active_provider_id: Arc<RwLock<String>>,
     config: Arc<RwLock<LlmConfig>>,
     config_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LlmConnectionTestedTarget {
+    pub role: String,
+    pub provider_id: String,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LlmConnectionTestResult {
+    pub tested_targets: Vec<LlmConnectionTestedTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConnectionTestRole {
+    Active,
+    System,
+}
+
+impl ConnectionTestRole {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::System => "system",
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Active => "Active",
+            Self::System => "System",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ConnectionTestTarget {
+    role: ConnectionTestRole,
+    provider_id: String,
+    provider_config: LlmProviderConfig,
 }
 
 impl LlmService {
@@ -146,6 +192,53 @@ impl LlmService {
     }
 }
 
+pub async fn test_config_connection(
+    config: LlmConfig,
+) -> Result<LlmConnectionTestResult, KokoroError> {
+    let normalized_config = normalize_config(config);
+    let test_targets = build_connection_test_targets(&normalized_config)?;
+    let mut tested_targets = Vec::with_capacity(test_targets.len());
+
+    for target in test_targets {
+        let provider = try_build_from_provider_config(&target.provider_config)?;
+        let response = provider
+            .chat(vec![user_text_message(CONNECTION_TEST_PROMPT)], None);
+        let response = tokio::time::timeout(Duration::from_secs(15), response)
+            .await
+            .map_err(|_| {
+                KokoroError::Llm(format!(
+                    "{} provider '{}' connection test timed out after 15 seconds",
+                    target.role.label(),
+                    target.provider_id
+                ))
+            })?
+            .map_err(|error| {
+                KokoroError::Llm(format!(
+                    "{} provider '{}' connection test failed: {}",
+                    target.role.label(),
+                    target.provider_id,
+                    error
+                ))
+            })?;
+
+        if response.trim().is_empty() {
+            return Err(KokoroError::Llm(format!(
+                "{} provider '{}' returned an empty response during connection test",
+                target.role.label(),
+                target.provider_id
+            )));
+        }
+
+        tested_targets.push(LlmConnectionTestedTarget {
+            role: target.role.as_str().to_string(),
+            provider_id: target.provider_id,
+            model: normalized_model_value(target.provider_config.model),
+        });
+    }
+
+    Ok(LlmConnectionTestResult { tested_targets })
+}
+
 fn try_provider_by_id(
     providers: &HashMap<String, Arc<dyn LlmProvider>>,
     provider_id: &str,
@@ -229,6 +322,80 @@ fn resolve_active_provider_id(config: &LlmConfig) -> Option<&str> {
     } else {
         config.providers.first().map(|p| p.id.as_str())
     }
+}
+
+fn build_connection_test_targets(
+    config: &LlmConfig,
+) -> Result<Vec<ConnectionTestTarget>, KokoroError> {
+    let active_provider_id = resolve_active_provider_id(config)
+        .ok_or_else(|| KokoroError::Config("No enabled LLM provider available to test".to_string()))?
+        .to_string();
+    let active_provider_config = find_enabled_provider_config(config, &active_provider_id)?;
+
+    let mut targets = vec![ConnectionTestTarget {
+        role: ConnectionTestRole::Active,
+        provider_id: active_provider_id.clone(),
+        provider_config: active_provider_config.clone(),
+    }];
+
+    let resolved_system_provider_id = config
+        .system_provider
+        .as_ref()
+        .filter(|provider_id| {
+            config
+                .providers
+                .iter()
+                .any(|provider| provider.enabled && provider.id == **provider_id)
+        })
+        .cloned()
+        .unwrap_or_else(|| active_provider_id.clone());
+
+    let mut system_provider_config = find_enabled_provider_config(config, &resolved_system_provider_id)?;
+    if let Some(system_model) = normalized_model_value(config.system_model.clone()) {
+        system_provider_config.model = Some(system_model);
+    }
+
+    let should_test_system = resolved_system_provider_id != active_provider_id
+        || normalized_model_value(system_provider_config.model.clone())
+            != normalized_model_value(active_provider_config.model.clone());
+
+    if should_test_system {
+        targets.push(ConnectionTestTarget {
+            role: ConnectionTestRole::System,
+            provider_id: resolved_system_provider_id,
+            provider_config: system_provider_config,
+        });
+    }
+
+    Ok(targets)
+}
+
+fn find_enabled_provider_config(
+    config: &LlmConfig,
+    provider_id: &str,
+) -> Result<LlmProviderConfig, KokoroError> {
+    config
+        .providers
+        .iter()
+        .find(|provider| provider.enabled && provider.id == provider_id)
+        .cloned()
+        .ok_or_else(|| {
+            KokoroError::Config(format!(
+                "LLM provider '{}' is not enabled or missing from the current configuration",
+                provider_id
+            ))
+        })
+}
+
+fn normalized_model_value(model: Option<String>) -> Option<String> {
+    model.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn build_provider_map(config: &LlmConfig) -> HashMap<String, Arc<dyn LlmProvider>> {
@@ -857,6 +1024,43 @@ mod tests {
 
         assert_eq!(provider.id(), "claude");
         assert!(provider.supports_native_tools());
+    }
+
+    #[test]
+    fn connection_test_targets_include_only_active_when_system_matches() {
+        let config = test_config_with_named_providers();
+
+        let targets = build_connection_test_targets(&config).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].role, ConnectionTestRole::Active);
+        assert_eq!(targets[0].provider_id, "active-provider");
+    }
+
+    #[test]
+    fn connection_test_targets_include_distinct_system_provider() {
+        let mut config = test_config_with_named_providers();
+        config.system_provider = Some("system-provider".to_string());
+
+        let targets = build_connection_test_targets(&config).unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[1].role, ConnectionTestRole::System);
+        assert_eq!(targets[1].provider_id, "system-provider");
+        assert_eq!(targets[1].provider_config.model.as_deref(), Some("gpt-4.1-mini"));
+    }
+
+    #[test]
+    fn connection_test_targets_include_system_model_override_even_when_provider_matches() {
+        let mut config = test_config_with_named_providers();
+        config.system_model = Some("gpt-4.1-nano".to_string());
+
+        let targets = build_connection_test_targets(&config).unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[1].role, ConnectionTestRole::System);
+        assert_eq!(targets[1].provider_id, "active-provider");
+        assert_eq!(targets[1].provider_config.model.as_deref(), Some("gpt-4.1-nano"));
     }
 
     fn make_service_with_active_and_system_provider() -> LlmService {

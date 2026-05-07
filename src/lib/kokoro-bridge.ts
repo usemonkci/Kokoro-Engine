@@ -190,6 +190,16 @@ export interface LlmConfig {
     presets?: LlmPreset[];
 }
 
+export interface LlmConnectionTestedTarget {
+    role: "active" | "system" | string;
+    provider_id: string;
+    model?: string;
+}
+
+export interface LlmConnectionTestResult {
+    tested_targets: LlmConnectionTestedTarget[];
+}
+
 export interface OllamaModelInfo {
     name: string;
     size?: number;
@@ -208,6 +218,10 @@ export async function getLlmConfig(): Promise<LlmConfig> {
 
 export async function saveLlmConfig(config: LlmConfig): Promise<void> {
     return invoke("save_llm_config", { config });
+}
+
+export async function testLlmConnection(config: LlmConfig): Promise<LlmConnectionTestResult> {
+    return invoke<LlmConnectionTestResult>("test_llm_connection", { config });
 }
 
 export async function listOllamaModels(baseUrl: string): Promise<OllamaModelInfo[]> {
@@ -360,12 +374,19 @@ export interface ChatTurnDeltaEvent {
 
 export interface ChatTurnFinishEvent {
     turn_id: string;
-    status: "completed" | "error";
+    status: "completed" | "error" | "cancelled";
 }
 
 export interface ChatTurnTranslationEvent {
     turn_id: string;
     translation: string;
+}
+
+export interface ChatTurnTextCompleteEvent {
+    turn_id: string;
+    text: string;
+    translation_pending: boolean;
+    translation?: string;
 }
 
 export interface ToolTraceItem {
@@ -413,6 +434,10 @@ export async function onChatTurnDelta(callback: (event: ChatTurnDeltaEvent) => v
 
 export async function onChatTurnFinish(callback: (event: ChatTurnFinishEvent) => void): Promise<UnlistenFn> {
     return listen<ChatTurnFinishEvent>("chat-turn-finish", (event) => callback(event.payload));
+}
+
+export async function onChatTurnTextComplete(callback: (event: ChatTurnTextCompleteEvent) => void): Promise<UnlistenFn> {
+    return listen<ChatTurnTextCompleteEvent>("chat-turn-text-complete", (event) => callback(event.payload));
 }
 
 export async function onChatTurnTranslation(callback: (event: ChatTurnTranslationEvent) => void): Promise<UnlistenFn> {

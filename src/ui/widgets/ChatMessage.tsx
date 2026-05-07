@@ -11,6 +11,7 @@ interface ChatMessageProps {
         text: string;
         images?: string[];
         translation?: string;
+        translationPending?: boolean;
         isError?: boolean;
         tools?: ToolTraceItem[];
     };
@@ -292,6 +293,13 @@ export const ChatMessage = memo(function ChatMessage({
                         </div>
                     )}
                 </>
+            )}
+
+            {!isEditing && msg.role === "kokoro" && msg.translationPending && !msg.translation && (
+                <div className="mt-2 -mb-1 flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
+                    <Languages size={11} strokeWidth={1.5} />
+                    {t("chat.translation.pending")}
+                </div>
             )}
 
             {/* Translation toggle */}

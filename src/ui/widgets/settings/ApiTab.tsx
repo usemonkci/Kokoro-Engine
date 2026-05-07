@@ -15,12 +15,14 @@ import {
     fetchModels,
     getLlmConfig,
     saveLlmConfig,
+    testLlmConnection,
     listAnthropicModels,
     listOllamaModels,
     getLlamaCppStatus,
     getContextSettings,
     setContextSettings as saveContextSettings,
     type LlmConfig,
+    type LlmConnectionTestResult,
     type LlmProviderConfig,
     type LlmPreset,
     type ContextSettings,
@@ -233,6 +235,8 @@ export default function ApiTab({ visionEnabled, onVisionEnabledChange, initialCo
     const [loading, setLoading] = useState(initialConfig === null);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+    const [testingConnection, setTestingConnection] = useState(false);
+    const [connectionTestSummary, setConnectionTestSummary] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -265,6 +269,10 @@ export default function ApiTab({ visionEnabled, onVisionEnabledChange, initialCo
             .then(setContextSettings)
             .catch((e) => console.error("Failed to load context settings:", e));
     }, [initialConfig]);
+
+    useEffect(() => {
+        setConnectionTestSummary(null);
+    }, [config, selectedPresetId]);
 
     const activeProvider = config
         ? config.providers.find((p) => p.id === config.active_provider) ?? config.providers[0]
@@ -420,47 +428,58 @@ export default function ApiTab({ visionEnabled, onVisionEnabledChange, initialCo
         saveLlmConfig(updated).catch((e) => setError(typeof e === 'string' ? e : ((e as any)?.message ?? JSON.stringify(e))));
     }, [config, selectedPresetId, t]);
 
+    const buildConfigForPersistence = useCallback((sourceConfig: LlmConfig): LlmConfig => {
+        const providerMap = new Map<string, LlmProviderConfig>();
+
+        sourceConfig.providers.forEach((provider) => providerMap.set(provider.id, provider));
+        (sourceConfig.presets || []).forEach((preset) => {
+            preset.providers.forEach((provider) => {
+                if (!providerMap.has(provider.id)) {
+                    providerMap.set(provider.id, JSON.parse(JSON.stringify(provider)));
+                }
+            });
+        });
+
+        let updatedConfig = normalizeSelectedProviders({
+            ...sourceConfig,
+            providers: Array.from(providerMap.values()),
+        });
+
+        if (selectedPresetId) {
+            const presets = [...(updatedConfig.presets || [])];
+            const idx = presets.findIndex((preset) => preset.id === selectedPresetId);
+            if (idx >= 0) {
+                presets[idx] = {
+                    ...presets[idx],
+                    active_provider: updatedConfig.active_provider,
+                    system_provider: updatedConfig.system_provider,
+                    system_model: updatedConfig.system_model,
+                    providers: JSON.parse(JSON.stringify(updatedConfig.providers)),
+                };
+                updatedConfig = { ...updatedConfig, presets };
+            }
+        }
+
+        return updatedConfig;
+    }, [selectedPresetId]);
+
+    const formatConnectionTestSummary = useCallback((result: LlmConnectionTestResult): string => {
+        const targets = result.tested_targets.map((target) => {
+            const roleLabel = target.role === "system"
+                ? t("settings.api.connection_test.system_role")
+                : t("settings.api.connection_test.active_role");
+            const modelLabel = target.model ? ` (${target.model})` : "";
+            return `${roleLabel}: ${target.provider_id}${modelLabel}`;
+        });
+        return `${t("settings.api.connection_test.success")}: ${targets.join(", ")}`;
+    }, [t]);
+
     const handleSave = async () => {
         if (!config) return;
         setSaving(true);
         setError(null);
         try {
-            // Merge all providers from all presets to ensure they're all available
-            const providerMap = new Map<string, LlmProviderConfig>();
-
-            // Start with current providers
-            config.providers.forEach(p => providerMap.set(p.id, p));
-
-            // Add providers from all presets
-            (config.presets || []).forEach(preset => {
-                preset.providers.forEach(p => {
-                    if (!providerMap.has(p.id)) {
-                        providerMap.set(p.id, JSON.parse(JSON.stringify(p)));
-                    }
-                });
-            });
-
-            let updatedConfig = normalizeSelectedProviders({
-                ...config,
-                providers: Array.from(providerMap.values()),
-            });
-
-            // If a preset is selected, also update that preset with current config
-            if (selectedPresetId) {
-                const presets = [...(updatedConfig.presets || [])];
-                const idx = presets.findIndex((p) => p.id === selectedPresetId);
-                if (idx >= 0) {
-                    presets[idx] = {
-                        ...presets[idx],
-                        active_provider: updatedConfig.active_provider,
-                        system_provider: updatedConfig.system_provider,
-                        system_model: updatedConfig.system_model,
-                        providers: JSON.parse(JSON.stringify(updatedConfig.providers)),
-                    };
-                    updatedConfig = { ...updatedConfig, presets };
-                }
-            }
-
+            const updatedConfig = buildConfigForPersistence(config);
             await saveLlmConfig(updatedConfig);
             setConfig(updatedConfig);
             onConfigSaved?.(updatedConfig);
@@ -471,6 +490,23 @@ export default function ApiTab({ visionEnabled, onVisionEnabledChange, initialCo
             setError(typeof e === 'string' ? e : ((e as any)?.message ?? JSON.stringify(e)));
         } finally {
             setSaving(false);
+        }
+    };
+
+    const handleTestConnection = async () => {
+        if (!config) return;
+        setTestingConnection(true);
+        setError(null);
+        try {
+            const updatedConfig = buildConfigForPersistence(config);
+            const result = await testLlmConnection(updatedConfig);
+            setConnectionTestSummary(formatConnectionTestSummary(result));
+        } catch (e) {
+            console.error("Failed to test LLM connection:", e);
+            setConnectionTestSummary(null);
+            setError(typeof e === 'string' ? e : ((e as any)?.message ?? JSON.stringify(e)));
+        } finally {
+            setTestingConnection(false);
         }
     };
 
@@ -917,34 +953,64 @@ export default function ApiTab({ visionEnabled, onVisionEnabledChange, initialCo
 
             {/* Save button */}
             <div className="pt-2 border-t border-[var(--color-border)]">
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className={clsx(
-                        "w-full py-2 text-xs rounded-lg border transition-all",
-                        saved
-                            ? "border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
-                            : "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20"
-                    )}
-                >
-                    {saving ? (
-                        <span className="flex items-center justify-center gap-1.5">
-                            <RefreshCw size={10} className="animate-spin" /> {t("settings.api.saving")}
-                        </span>
-                    ) : saved ? (
-                        <span className="flex items-center justify-center gap-1.5">
-                            <Check size={10} /> {t("common.actions.saved")}
-                        </span>
-                    ) : (
-                        t("settings.api.save_config")
-                    )}
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                    <button
+                        onClick={handleTestConnection}
+                        disabled={testingConnection || saving}
+                        className={clsx(
+                            "py-2 text-xs rounded-lg border transition-all",
+                            connectionTestSummary
+                                ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-300"
+                                : "border-[var(--color-border)] text-[var(--color-text-main)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                        )}
+                    >
+                        {testingConnection ? (
+                            <span className="flex items-center justify-center gap-1.5">
+                                <RefreshCw size={10} className="animate-spin" /> {t("settings.api.connection_test.testing")}
+                            </span>
+                        ) : connectionTestSummary ? (
+                            <span className="flex items-center justify-center gap-1.5">
+                                <Check size={10} /> {t("settings.api.connection_test.success")}
+                            </span>
+                        ) : (
+                            t("settings.api.connection_test.button")
+                        )}
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={saving || testingConnection}
+                        className={clsx(
+                            "py-2 text-xs rounded-lg border transition-all",
+                            saved
+                                ? "border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
+                                : "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20"
+                        )}
+                    >
+                        {saving ? (
+                            <span className="flex items-center justify-center gap-1.5">
+                                <RefreshCw size={10} className="animate-spin" /> {t("settings.api.saving")}
+                            </span>
+                        ) : saved ? (
+                            <span className="flex items-center justify-center gap-1.5">
+                                <Check size={10} /> {t("common.actions.saved")}
+                            </span>
+                        ) : (
+                            t("settings.api.save_config")
+                        )}
+                    </button>
+                </div>
             </div>
 
             {/* Error display */}
             {error && (
                 <div className="text-[10px] text-red-400 bg-red-400/10 px-3 py-2 rounded-lg">
                     {error}
+                </div>
+            )}
+
+            {connectionTestSummary && !error && (
+                <div className="text-[10px] text-emerald-300 bg-emerald-400/10 px-3 py-2 rounded-lg">
+                    {connectionTestSummary}
                 </div>
             )}
 
