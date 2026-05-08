@@ -521,10 +521,11 @@
                 "desc": "無効にすると、キャラクターは記憶の読み取り、書き込み、抽出、整理を行いません。再度有効にした後は、その時点以降の新しい会話だけを記録します。",
                 "disabled_hint": "記憶システムは無効です。既存の記憶は閲覧できますが、会話には注入されず、新しい記憶・要約・感情スナップショットも作成されません。"
             },
-            "tabs": {
-                "list": "リスト",
-                "timeline": "タイムライン",
-                "graph": "グラフ"
+        "tabs": {
+            "list": "リスト",
+            "timeline": "タイムライン",
+            "graph": "グラフ",
+            "dream": "夢"
             },
             "search": {
                 "placeholder": "記憶を検索..."
@@ -547,13 +548,107 @@
                 "hours_ago": "{{count}}時間前",
                 "days_ago": "{{count}}日前"
             },
-            "importance": {
-                "high": "高",
-                "med": "中",
-                "low": "低"
+        "importance": {
+            "high": "高",
+            "med": "中",
+            "low": "低"
+        },
+        "dream": {
+            "title": "夢の整理",
+            "summary": "保留 {{pending}} · 自動 {{auto}}",
+            "refresh": "更新",
+            "run_now": "今すぐ実行",
+            "running": "実行中",
+            "schedule": {
+                "title": "毎日の自動整理時刻",
+                "hint": "アプリがバックグラウンドで起動している場合、毎日 {{hour}}:00 以降に 60 秒間アイドルになると夢タスクを実行します。",
+                "saving": "保存中",
+                "saved": "保存済み"
             },
-            "upgrade": {
-                "title": "記憶アクティビティ",
+            "latest": {
+                "last": "最新: {{status}}",
+                "auto_applied": "自動適用: {{count}}",
+                "proposals": "提案: {{count}}"
+            },
+            "empty_proposals": "保留中の夢提案はありません。",
+            "recent_jobs": "最近のジョブ",
+            "sources": "ソース: {{ids}}",
+            "proposed_content": "提案された記憶",
+            "source_memories": "比較対象の元記憶",
+            "source_memory_id": "記憶 #{{id}}",
+            "source_missing": "元の記憶は利用できません。",
+            "entity_key": "キー: {{key}}",
+            "actions": {
+                "approve": "承認",
+                "reject": "拒否"
+            },
+            "statuses": {
+                "active": "有効",
+                "pending": "保留中",
+                "ready": "完了",
+                "running": "実行中",
+                "interrupted": "中断済み",
+                "failed": "失敗",
+                "superseded": "置換済み",
+                "archived": "アーカイブ済み",
+                "auto_applied": "自動適用済み",
+                "approved": "承認済み",
+                "rejected": "拒否済み"
+            },
+            "job_triggers": {
+                "manual": "手動",
+                "daily_idle": "毎日の自動整理"
+            },
+            "proposal_types": {
+                "conflict_review": "競合レビュー",
+                "semantic_review": "類似レビュー",
+                "canonical_duplicate": "完全重複",
+                "entity_slot_merge": "スロット統合",
+                "llm_semantic_auto_merge": "LLM 自動統合",
+                "llm_conflict_review": "LLM 競合レビュー",
+                "llm_semantic_review": "LLM 統合レビュー",
+                "llm_discovery_review": "LLM 夢発見",
+                "llm_discovery_conflict_review": "LLM 夢の競合",
+                "llm_discovery_update_review": "LLM 夢の更新",
+                "semantic_auto_merge": "意味的自動統合"
+            },
+            "proposal_titles": {
+                "conflict_review": "競合している可能性のある記憶を確認",
+                "semantic_review": "類似した記憶を確認",
+                "canonical_duplicate": "完全重複した記憶を統合しました",
+                "entity_slot_merge": "重複スロットの記憶を統合しました",
+                "llm_semantic_auto_merge": "LLM が確認した記憶を統合しました",
+                "llm_conflict_review": "LLM が検出した記憶の競合を確認",
+                "llm_semantic_review": "LLM が提案した記憶統合を確認",
+                "llm_discovery_review": "LLM の夢が見つけた記憶関係を確認",
+                "llm_discovery_conflict_review": "LLM の夢が見つけた記憶の競合を確認",
+                "llm_discovery_update_review": "LLM の夢が見つけた記憶の更新を確認",
+                "semantic_auto_merge": "非常に類似した記憶を統合しました"
+            },
+            "proposal_rationales": {
+                "conflict_review": "新しい記憶が既存の有効な記憶と矛盾している可能性があります。",
+                "semantic_review": "これらの記憶は意味的に似ていますが、自動統合のしきい値には届いていません。",
+                "canonical_duplicate": "Dream Light が重複した正規化ハッシュを検出しました。",
+                "entity_slot_merge": "Dream REM が同じ構造化スロットに複数の有効な記憶を検出しました。",
+                "llm_semantic_auto_merge": "LLM がこれらの記憶を安全に統合できると確認しました。",
+                "llm_conflict_review": "LLM が矛盾の可能性を検出しました。",
+                "llm_semantic_review": "LLM がこれらの類似記憶の確認を提案しました。",
+                "llm_discovery_review": "LLM の夢が、これらの記憶の間に見えにくい関係を見つけました。",
+                "llm_discovery_conflict_review": "LLM の夢が、これらの記憶の間に見えにくい競合の可能性を見つけました。",
+                "llm_discovery_update_review": "LLM の夢が、これらの記憶の間に見えにくい更新関係を見つけました。",
+                "semantic_auto_merge": "Dream Deep が高信頼度の意味的重複を検出しました。"
+            },
+            "proposal_impacts": {
+                "conflict_review": "古い記憶を無効化または置換する前に手動確認が必要です。",
+                "semantic_review": "どちらかの記憶を置き換える前に手動確認が必要です。",
+                "auto_merged": "重複した有効な記憶を自動統合し、元の行は置換済みとしてマークしました。",
+                "llm_conflict_review": "有効な記憶を変更する前に手動確認が必要です。",
+                "llm_semantic_review": "信頼度が自動適用しきい値を下回ったため、手動確認が必要です。",
+                "llm_discovery_review": "この関係は決定的な類似度ではなく LLM の夢によって発見されたため、手動確認が必要です。"
+            }
+        },
+        "upgrade": {
+            "title": "記憶アクティビティ",
                 "loading": "メモリテレメトリを読み込み中...",
                 "write_events": "書き込みイベント",
                 "retrieval_logs": "検索ログ",

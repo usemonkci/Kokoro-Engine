@@ -790,6 +790,13 @@ export interface MemoryRecord {
     created_at: number;
     importance: number;
     tier: string;
+    memory_type: string;
+    entity_key: string | null;
+    status: string;
+    confidence: number;
+    first_seen_at: number;
+    last_seen_at: number;
+    evidence_count: number;
 }
 
 export interface ListMemoriesResponse {
@@ -804,6 +811,10 @@ export type MemoryUpgradeConfig = {
     readonly structured_memory_enabled: boolean;
     readonly intent_routing_enabled: boolean;
     readonly retrieval_eval_enabled: boolean;
+    readonly dreaming_enabled: boolean;
+    readonly dream_auto_apply_level: "conservative" | "review_only" | "aggressive" | string;
+    readonly dream_daily_hour: number;
+    readonly dream_review_required_for_conflicts: boolean;
 };
 
 export type MemoryObservabilitySummary = {
@@ -837,6 +848,63 @@ export type MemoryRetrievalEvalSummary = {
     readonly retrieval_eval_enabled: boolean;
     readonly query_length: number;
     readonly candidate_efficiency_pct: number;
+};
+
+export type MemoryDreamJobRecord = {
+    readonly id: number;
+    readonly character_id: string;
+    readonly phase: string;
+    readonly status: string;
+    readonly trigger: string;
+    readonly started_at: number;
+    readonly finished_at: number | null;
+    readonly auto_applied_count: number;
+    readonly proposal_count: number;
+    readonly error: string | null;
+};
+
+export type MemoryDreamSourceRecord = {
+    readonly id: number;
+    readonly content: string;
+    readonly created_at: number;
+    readonly updated_at: number;
+    readonly importance: number;
+    readonly tier: string;
+    readonly memory_type: string;
+    readonly entity_key: string | null;
+    readonly status: string;
+};
+
+export type MemoryDreamProposalRecord = {
+    readonly id: number;
+    readonly character_id: string;
+    readonly proposal_type: string;
+    readonly status: string;
+    readonly confidence: number;
+    readonly title: string;
+    readonly rationale: string;
+    readonly source_memory_ids: string;
+    readonly source_memories: MemoryDreamSourceRecord[];
+    readonly target_memory_id: number | null;
+    readonly proposed_content: string | null;
+    readonly proposed_memory_type: string | null;
+    readonly proposed_entity_key: string | null;
+    readonly impact: string;
+    readonly created_at: number;
+    readonly updated_at: number;
+    readonly applied_at: number | null;
+};
+
+export type MemoryDreamingSummary = {
+    readonly latest_job: MemoryDreamJobRecord | null;
+    readonly pending_proposal_count: number;
+    readonly auto_applied_proposal_count: number;
+};
+
+export type MemoryDreamRunResult = {
+    readonly job: MemoryDreamJobRecord;
+    readonly auto_applied_count: number;
+    readonly proposal_count: number;
 };
 
 export interface MemoryEmbeddingModelStatus {
@@ -922,6 +990,46 @@ export async function getLatestMemoryRetrievalLog(): Promise<MemoryRetrievalLogR
 
 export async function getLatestMemoryRetrievalEvalSummary(): Promise<MemoryRetrievalEvalSummary | null> {
     return invoke<MemoryRetrievalEvalSummary | null>("get_latest_memory_retrieval_eval_summary");
+}
+
+export async function runDreamNow(characterId: string): Promise<MemoryDreamRunResult> {
+    return invoke<MemoryDreamRunResult>("run_dream_now", {
+        request: { character_id: characterId },
+    });
+}
+
+export async function getDreamingSummary(characterId: string): Promise<MemoryDreamingSummary> {
+    return invoke<MemoryDreamingSummary>("get_dreaming_summary", {
+        request: { character_id: characterId },
+    });
+}
+
+export async function listDreamJobs(characterId: string, limit = 20): Promise<MemoryDreamJobRecord[]> {
+    return invoke<MemoryDreamJobRecord[]>("list_dream_jobs", {
+        request: { character_id: characterId, limit },
+    });
+}
+
+export async function listDreamProposals(
+    characterId: string,
+    status = "pending",
+    limit = 50,
+): Promise<MemoryDreamProposalRecord[]> {
+    return invoke<MemoryDreamProposalRecord[]>("list_dream_proposals", {
+        request: { character_id: characterId, status, limit },
+    });
+}
+
+export async function approveDreamProposal(id: number): Promise<void> {
+    return invoke("approve_dream_proposal", {
+        request: { id },
+    });
+}
+
+export async function rejectDreamProposal(id: number): Promise<void> {
+    return invoke("reject_dream_proposal", {
+        request: { id },
+    });
 }
 
 // ── STT (Speech-to-Text) ──────────────────────────────

@@ -521,10 +521,11 @@
                 "desc": "When disabled, the character will not read, write, extract, or consolidate memories. Re-enabling resumes from new conversations only.",
                 "disabled_hint": "Memory system is disabled. Existing memories can still be viewed, but they will not be injected into chat and no new memories, summaries, or emotion snapshots will be created."
             },
-            "tabs": {
-                "list": "List",
-                "timeline": "Timeline",
-                "graph": "Graph"
+        "tabs": {
+            "list": "List",
+            "timeline": "Timeline",
+            "graph": "Graph",
+            "dream": "Dream"
             },
             "search": {
                 "placeholder": "Search memories..."
@@ -547,13 +548,107 @@
                 "hours_ago": "{{count}}h ago",
                 "days_ago": "{{count}}d ago"
             },
-            "importance": {
-                "high": "HIGH",
-                "med": "MED",
-                "low": "LOW"
+        "importance": {
+            "high": "HIGH",
+            "med": "MED",
+            "low": "LOW"
+        },
+        "dream": {
+            "title": "Dreaming",
+            "summary": "Pending {{pending}} · Auto {{auto}}",
+            "refresh": "Refresh",
+            "run_now": "Run now",
+            "running": "Running",
+            "schedule": {
+                "title": "Daily auto dream time",
+                "hint": "When the app is running in the background, the dream job starts after {{hour}}:00 once the app has been idle for 60 seconds.",
+                "saving": "Saving",
+                "saved": "Saved"
             },
-            "upgrade": {
-                "title": "Memory Activity",
+            "latest": {
+                "last": "Last: {{status}}",
+                "auto_applied": "Auto applied: {{count}}",
+                "proposals": "Proposals: {{count}}"
+            },
+            "empty_proposals": "No pending dream proposals.",
+            "recent_jobs": "Recent jobs",
+            "sources": "Sources: {{ids}}",
+            "proposed_content": "Suggested memory",
+            "source_memories": "Compared source memories",
+            "source_memory_id": "Memory #{{id}}",
+            "source_missing": "Source memory is no longer available.",
+            "entity_key": "Key: {{key}}",
+            "actions": {
+                "approve": "Approve",
+                "reject": "Reject"
+            },
+            "statuses": {
+                "active": "Active",
+                "pending": "Pending",
+                "ready": "Ready",
+                "running": "Running",
+                "interrupted": "Interrupted",
+                "failed": "Failed",
+                "superseded": "Superseded",
+                "archived": "Archived",
+                "auto_applied": "Auto applied",
+                "approved": "Approved",
+                "rejected": "Rejected"
+            },
+            "job_triggers": {
+                "manual": "Manual",
+                "daily_idle": "Daily auto dream"
+            },
+            "proposal_types": {
+                "conflict_review": "Conflict review",
+                "semantic_review": "Similarity review",
+                "canonical_duplicate": "Exact duplicate",
+                "entity_slot_merge": "Slot merge",
+                "llm_semantic_auto_merge": "LLM auto merge",
+                "llm_conflict_review": "LLM conflict review",
+                "llm_semantic_review": "LLM merge review",
+                "llm_discovery_review": "LLM discovery",
+                "llm_discovery_conflict_review": "LLM discovery conflict",
+                "llm_discovery_update_review": "LLM discovery update",
+                "semantic_auto_merge": "Semantic auto merge"
+            },
+            "proposal_titles": {
+                "conflict_review": "Review possible memory conflict",
+                "semantic_review": "Review similar memories",
+                "canonical_duplicate": "Merged exact duplicate memories",
+                "entity_slot_merge": "Merged duplicate slot memories",
+                "llm_semantic_auto_merge": "Merged LLM-confirmed memories",
+                "llm_conflict_review": "Review LLM-detected memory conflict",
+                "llm_semantic_review": "Review LLM memory merge suggestion",
+                "llm_discovery_review": "Review LLM-discovered memory relation",
+                "llm_discovery_conflict_review": "Review LLM-discovered memory conflict",
+                "llm_discovery_update_review": "Review LLM-discovered memory update",
+                "semantic_auto_merge": "Merged highly similar memories"
+            },
+            "proposal_rationales": {
+                "conflict_review": "A new memory appears to contradict an existing active memory.",
+                "semantic_review": "These memories are semantically similar but below the automatic merge threshold.",
+                "canonical_duplicate": "Dream Light found duplicate canonical hashes.",
+                "entity_slot_merge": "Dream REM found multiple active memories for the same structured slot.",
+                "llm_semantic_auto_merge": "LLM confirmed these memories are safely mergeable.",
+                "llm_conflict_review": "LLM detected a possible contradiction.",
+                "llm_semantic_review": "LLM suggested reviewing these similar memories.",
+                "llm_discovery_review": "LLM Dream Discovery found a non-obvious relationship between these memories.",
+                "llm_discovery_conflict_review": "LLM Dream Discovery found a non-obvious possible conflict between these memories.",
+                "llm_discovery_update_review": "LLM Dream Discovery found a non-obvious possible update between these memories.",
+                "semantic_auto_merge": "Dream Deep found a high-confidence semantic duplicate."
+            },
+            "proposal_impacts": {
+                "conflict_review": "Manual review required before invalidating or replacing the older memory.",
+                "semantic_review": "Manual review required before superseding either memory.",
+                "auto_merged": "Auto-merged duplicate active memories; source rows were marked superseded.",
+                "llm_conflict_review": "Manual review required before changing either active memory.",
+                "llm_semantic_review": "Manual review required because confidence was below the auto-apply threshold.",
+                "llm_discovery_review": "Manual review required because this relation was discovered by LLM rather than deterministic similarity."
+            }
+        },
+        "upgrade": {
+            "title": "Memory Activity",
                 "loading": "Loading memory telemetry...",
                 "write_events": "write events",
                 "retrieval_logs": "retrieval logs",

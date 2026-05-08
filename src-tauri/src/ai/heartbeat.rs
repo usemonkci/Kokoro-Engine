@@ -47,6 +47,7 @@ pub async fn heartbeat_loop(app_handle: AppHandle) {
     let mut last_proactive_ts = std::time::Instant::now();
     let _last_time_period = current_time_period();
     let mut last_prune_ts = std::time::Instant::now();
+    let mut last_dream_date: Option<chrono::NaiveDate> = None;
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
@@ -90,7 +91,65 @@ pub async fn heartbeat_loop(app_handle: AppHandle) {
             });
         }
 
-        // 5. Initiative System
+        // 5. Dream Memory v2 daily consolidation (once per local day after configured hour)
+        if orchestrator.is_memory_enabled() {
+            let memory_config = crate::config::load_memory_upgrade_config(
+                &crate::ai::memory::memory_upgrade_config_path(),
+            );
+            let now = chrono::Local::now();
+            let today = now.date_naive();
+            if memory_config.dreaming_enabled
+                && now.hour() >= u32::from(memory_config.dream_daily_hour)
+                && last_dream_date != Some(today)
+                && idle_secs >= 60
+            {
+                let memory_mgr = orchestrator.memory_manager.clone();
+                let char_id = orchestrator.get_character_id().await;
+                let day_start_ts = now.timestamp() - i64::from(now.num_seconds_from_midnight());
+                match memory_mgr
+                    .has_dream_job_since(&char_id, "daily_idle", day_start_ts)
+                    .await
+                {
+                    Ok(true) => {
+                        last_dream_date = Some(today);
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "memory",
+                            "[Memory] Failed to check daily dream job guard: {}",
+                            error
+                        );
+                    }
+                }
+                last_dream_date = Some(today);
+                let target_language = orchestrator.response_language.lock().await.clone();
+                let provider = app_handle
+                    .try_state::<crate::llm::service::LlmService>()
+                    .map(|state| state.inner().clone());
+                tauri::async_runtime::spawn(async move {
+                    let provider = if let Some(llm_state) = provider {
+                        Some(llm_state.system_provider().await)
+                    } else {
+                        None
+                    };
+                    if let Err(error) = memory_mgr
+                        .run_dream_now_with_provider(
+                            &char_id,
+                            "daily_idle",
+                            provider,
+                            Some(target_language),
+                        )
+                        .await
+                    {
+                        tracing::warn!(target: "memory", "[Memory] Daily dream job failed: {}", error);
+                    }
+                });
+            }
+        }
+
+        // 6. Initiative System
         if idle_secs < config.idle_threshold_secs {
             continue;
         }

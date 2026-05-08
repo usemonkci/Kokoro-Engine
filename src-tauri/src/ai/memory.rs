@@ -5,6 +5,7 @@ use anyhow::Result;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use std::collections::{HashMap, HashSet};
 #[cfg(not(test))]
 use tokio::sync::Mutex;
 
@@ -55,6 +56,181 @@ const CONVERSATION_SUMMARY_MIN_MESSAGES: usize = 8;
 const CONVERSATION_SUMMARY_MAX_MESSAGES: usize = 12;
 const CONVERSATION_SUMMARY_FAILURE_THRESHOLD: i64 = 3;
 const CONVERSATION_SUMMARY_COOLDOWN_SECS: i64 = 15 * 60;
+const DREAM_SEMANTIC_AUTO_MERGE_THRESHOLD: f32 = 0.97;
+const DREAM_SEMANTIC_REVIEW_THRESHOLD: f32 = 0.90;
+const DREAM_CONFIDENCE_AUTO_APPLY: f64 = 0.88;
+const DREAM_LLM_DISCOVERY_BATCH_SIZE: usize = 48;
+const DREAM_LLM_DISCOVERY_BATCH_OVERLAP: usize = 8;
+const DREAM_LLM_DISCOVERY_MIN_CONFIDENCE: f64 = 0.70;
+const DREAM_LLM_DISCOVERY_MAX_PROPOSALS_PER_RUN: i64 = 24;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MemoryMetadata {
+    memory_type: String,
+    entity_key: Option<String>,
+    canonical_content: Option<String>,
+}
+
+fn normalize_memory_text(content: &str) -> String {
+    content
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn stable_hash64(input: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
+}
+
+fn canonical_hash(content: &str) -> String {
+    stable_hash64(&normalize_memory_text(content))
+}
+
+fn strip_structured_memory_prefix(content: &str) -> &str {
+    let trimmed = content.trim();
+    if trimmed.starts_with('[') {
+        if let Some(end) = trimmed.find("] ") {
+            return trimmed[(end + 2)..].trim();
+        }
+    }
+    trimmed
+}
+
+fn parse_structured_memory_metadata(content: &str) -> (Option<String>, Option<String>) {
+    let trimmed = content.trim();
+    if !trimmed.starts_with('[') {
+        return (None, None);
+    }
+    let Some(end) = trimmed.find(']') else {
+        return (None, None);
+    };
+    let tags = &trimmed[1..end];
+    let mut memory_type = None;
+    let mut entity_key = None;
+    for tag in tags.split('|') {
+        let Some((key, value)) = tag.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match key.trim() {
+            "type" => memory_type = Some(value.to_string()),
+            "key" => entity_key = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    (memory_type, entity_key)
+}
+
+fn short_key_fragment(value: &str) -> String {
+    normalize_memory_text(value)
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '-' || *ch == '.')
+        .take(48)
+        .collect::<String>()
+}
+
+fn infer_memory_metadata(content: &str) -> MemoryMetadata {
+    let (structured_type, structured_key) = parse_structured_memory_metadata(content);
+    let plain = strip_structured_memory_prefix(content);
+    let normalized = normalize_memory_text(plain);
+
+    if let Some(memory_type) = structured_type {
+        return MemoryMetadata {
+            memory_type,
+            entity_key: structured_key,
+            canonical_content: None,
+        };
+    }
+
+    if normalized.contains("用户的名字")
+        || normalized.contains("用户名字")
+        || normalized.contains("user's name")
+        || normalized.contains("user name")
+        || normalized.contains("my name is")
+        || normalized.contains("call me")
+    {
+        return MemoryMetadata {
+            memory_type: "profile".to_string(),
+            entity_key: Some("user.name".to_string()),
+            canonical_content: None,
+        };
+    }
+
+    if normalized.contains("喜欢")
+        || normalized.contains("不喜欢")
+        || normalized.contains("更喜欢")
+        || normalized.contains("讨厌")
+        || normalized.contains("prefer")
+        || normalized.contains("i like")
+        || normalized.contains("i dislike")
+    {
+        return MemoryMetadata {
+            memory_type: "preference".to_string(),
+            entity_key: Some(format!("preference.{}", short_key_fragment(plain))),
+            canonical_content: None,
+        };
+    }
+
+    if normalized.contains("计划")
+        || normalized.contains("打算")
+        || normalized.contains("明天")
+        || normalized.contains("下周")
+        || normalized.contains("plan to")
+        || normalized.contains("i will")
+    {
+        return MemoryMetadata {
+            memory_type: "plan".to_string(),
+            entity_key: None,
+            canonical_content: None,
+        };
+    }
+
+    MemoryMetadata {
+        memory_type: "fact".to_string(),
+        entity_key: None,
+        canonical_content: None,
+    }
+}
+
+fn proposal_ids_json(ids: &[i64]) -> Result<String> {
+    Ok(serde_json::to_string(ids)?)
+}
+
+fn parse_proposal_ids(raw: &str) -> Vec<i64> {
+    serde_json::from_str(raw).unwrap_or_default()
+}
+
+fn now_ts() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+fn strip_code_fences_for_memory_json(response: &str) -> &str {
+    let trimmed = response.trim();
+    if trimmed.starts_with("```") {
+        let after_open = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```"))
+            .unwrap_or(trimmed)
+            .trim_start_matches('\n')
+            .trim_start();
+        if let Some(end) = after_open.rfind("```") {
+            return after_open[..end].trim();
+        }
+    }
+    trimmed
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -329,6 +505,170 @@ pub struct MemoryWriteEventRecord {
     pub deduplicated_count: i64,
     pub invalidated_count: i64,
     pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct MemoryDreamJobRecord {
+    pub id: i64,
+    pub character_id: String,
+    pub phase: String,
+    pub status: String,
+    pub trigger: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub auto_applied_count: i64,
+    pub proposal_count: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct MemoryDreamSourceRecord {
+    pub id: i64,
+    pub content: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub importance: f64,
+    pub tier: String,
+    pub memory_type: String,
+    pub entity_key: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct MemoryDreamProposalRow {
+    pub id: i64,
+    pub character_id: String,
+    pub proposal_type: String,
+    pub status: String,
+    pub confidence: f64,
+    pub title: String,
+    pub rationale: String,
+    pub source_memory_ids: String,
+    pub target_memory_id: Option<i64>,
+    pub proposed_content: Option<String>,
+    pub proposed_memory_type: Option<String>,
+    pub proposed_entity_key: Option<String>,
+    pub impact: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub applied_at: Option<i64>,
+}
+
+impl MemoryDreamProposalRow {
+    fn into_record(
+        self,
+        source_memories: Vec<MemoryDreamSourceRecord>,
+    ) -> MemoryDreamProposalRecord {
+        MemoryDreamProposalRecord {
+            id: self.id,
+            character_id: self.character_id,
+            proposal_type: self.proposal_type,
+            status: self.status,
+            confidence: self.confidence,
+            title: self.title,
+            rationale: self.rationale,
+            source_memory_ids: self.source_memory_ids,
+            source_memories,
+            target_memory_id: self.target_memory_id,
+            proposed_content: self.proposed_content,
+            proposed_memory_type: self.proposed_memory_type,
+            proposed_entity_key: self.proposed_entity_key,
+            impact: self.impact,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            applied_at: self.applied_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryDreamProposalRecord {
+    pub id: i64,
+    pub character_id: String,
+    pub proposal_type: String,
+    pub status: String,
+    pub confidence: f64,
+    pub title: String,
+    pub rationale: String,
+    pub source_memory_ids: String,
+    pub source_memories: Vec<MemoryDreamSourceRecord>,
+    pub target_memory_id: Option<i64>,
+    pub proposed_content: Option<String>,
+    pub proposed_memory_type: Option<String>,
+    pub proposed_entity_key: Option<String>,
+    pub impact: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub applied_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryDreamingSummary {
+    pub latest_job: Option<MemoryDreamJobRecord>,
+    pub pending_proposal_count: i64,
+    pub auto_applied_proposal_count: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryDreamRunResult {
+    pub job: MemoryDreamJobRecord,
+    pub auto_applied_count: i64,
+    pub proposal_count: i64,
+}
+
+#[derive(Debug, Clone)]
+struct DreamCandidateEntry {
+    id: i64,
+    content: String,
+    embedding: Vec<f32>,
+    created_at: i64,
+    updated_at: i64,
+    importance: f64,
+    tier: String,
+    memory_type: String,
+    entity_key: Option<String>,
+    canonical_hash: Option<String>,
+    evidence_count: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DreamPairAssessment {
+    decision: String,
+    confidence: f64,
+    #[serde(default)]
+    canonical_memory_id: Option<i64>,
+    #[serde(default)]
+    merged_memory: Option<String>,
+    #[serde(default)]
+    rationale: Option<String>,
+    #[serde(default)]
+    memory_type: Option<String>,
+    #[serde(default)]
+    entity_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DreamDiscoveryProposal {
+    #[serde(default)]
+    source_memory_ids: Vec<i64>,
+    #[serde(default)]
+    decision: String,
+    #[serde(default)]
+    confidence: f64,
+    #[serde(default)]
+    canonical_memory_id: Option<i64>,
+    #[serde(default)]
+    proposed_content: Option<String>,
+    #[serde(default)]
+    memory_type: Option<String>,
+    #[serde(default)]
+    entity_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DreamDiscoveryResponse {
+    #[serde(default)]
+    proposals: Vec<DreamDiscoveryProposal>,
 }
 
 fn is_observability_enabled() -> bool {
@@ -1472,6 +1812,37 @@ impl MemoryManager {
         }
     }
 
+    pub async fn mark_interrupted_dream_jobs(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE memory_dream_jobs \
+             SET status = 'interrupted', finished_at = ?, error = ? \
+             WHERE status = 'running'",
+        )
+        .bind(now_ts())
+        .bind("Dream job was interrupted before completion.")
+        .execute(&self.db)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn has_dream_job_since(
+        &self,
+        character_id: &str,
+        trigger: &str,
+        since_ts: i64,
+    ) -> Result<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_dream_jobs \
+             WHERE character_id = ? AND trigger = ? AND started_at >= ?",
+        )
+        .bind(character_id)
+        .bind(trigger)
+        .bind(since_ts)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(count > 0)
+    }
+
     #[cfg(not(test))]
     fn resolve_snapshot_dir(repo_dir: &std::path::Path) -> Option<std::path::PathBuf> {
         use std::fs;
@@ -1716,84 +2087,308 @@ impl MemoryManager {
     }
 
     pub async fn add_memory(&self, content: &str, character_id: &str) -> Result<()> {
-        let embedding = self.embed(content).await?;
-        let embedding_bytes: Vec<u8> = bincode::serialize(&embedding)?;
-        let now = chrono::Utc::now().timestamp();
-
-        // Deduplication: check if a very similar memory already exists
-        if let Ok(true) = self
-            .deduplicate_or_refresh(&embedding, character_id, now)
+        self.add_memory_with_importance(content, character_id, 0.5)
             .await
-        {
-            tracing::info!(
-                target: "memory",
-                "[Memory] Deduplicated: refreshed existing memory for '{}'",
-                &content[..content.len().min(50)]
-            );
-            return Ok(());
-        }
+    }
+
+    async fn insert_memory_candidate(
+        &self,
+        content: &str,
+        character_id: &str,
+        importance: f64,
+        confidence: f64,
+        metadata: &MemoryMetadata,
+        canonical_hash: &str,
+        now: i64,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO memory_candidates \
+             (character_id, content, memory_type, entity_key, importance, confidence, canonical_hash, source_kind, source_refs, decision, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'extractor', '[]', 'pending', ?)",
+        )
+        .bind(character_id)
+        .bind(content)
+        .bind(&metadata.memory_type)
+        .bind(metadata.entity_key.as_deref())
+        .bind(importance.clamp(0.0, 1.0))
+        .bind(confidence.clamp(0.0, 1.0))
+        .bind(canonical_hash)
+        .bind(now)
+        .execute(&self.db)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    async fn mark_candidate_decision(
+        &self,
+        candidate_id: i64,
+        decision: &str,
+        applied_memory_id: Option<i64>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE memory_candidates SET decision = ?, applied_memory_id = ?, decided_at = ? WHERE id = ?",
+        )
+        .bind(decision)
+        .bind(applied_memory_id)
+        .bind(now_ts())
+        .bind(candidate_id)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    async fn record_memory_operation(
+        &self,
+        character_id: &str,
+        operation_type: &str,
+        actor: &str,
+        memory_id: Option<i64>,
+        proposal_id: Option<i64>,
+        before_json: Option<String>,
+        after_json: Option<String>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO memory_operations \
+             (character_id, operation_type, actor, memory_id, proposal_id, before_json, after_json, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(character_id)
+        .bind(operation_type)
+        .bind(actor)
+        .bind(memory_id)
+        .bind(proposal_id)
+        .bind(before_json)
+        .bind(after_json)
+        .bind(now_ts())
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    async fn refresh_exact_duplicate_by_hash(
+        &self,
+        character_id: &str,
+        canonical_hash: &str,
+        now: i64,
+        importance: f64,
+    ) -> Result<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT id, importance, evidence_count FROM memories \
+             WHERE character_id = ? AND canonical_hash = ? AND status = 'active' \
+             ORDER BY importance DESC, updated_at DESC LIMIT 1",
+        )
+        .bind(character_id)
+        .bind(canonical_hash)
+        .fetch_optional(&self.db)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let id: i64 = row.get("id");
+        let existing_importance: f64 = row.get("importance");
+        let evidence_count: i64 = row.get("evidence_count");
+        let best_importance = existing_importance.max(importance.clamp(0.0, 1.0));
+        let tier = if best_importance >= 0.8 {
+            "core"
+        } else {
+            "ephemeral"
+        };
 
         sqlx::query(
-            "INSERT INTO memories (content, embedding, created_at, updated_at, importance, character_id, tier) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "UPDATE memories \
+             SET updated_at = ?, last_seen_at = ?, evidence_count = ?, importance = ?, tier = ? \
+             WHERE id = ?",
         )
-        .bind(content)
-        .bind(embedding_bytes)
         .bind(now)
         .bind(now)
-        .bind(0.5) // Default importance
-        .bind(character_id)
-        .bind("ephemeral")
+        .bind(evidence_count.saturating_add(1))
+        .bind(best_importance)
+        .bind(tier)
+        .bind(id)
         .execute(&self.db)
         .await?;
 
-        Ok(())
+        self.record_memory_operation(
+            character_id,
+            "deduplicate_exact",
+            "memory_pipeline",
+            Some(id),
+            None,
+            None,
+            Some(serde_json::json!({ "importance": best_importance, "evidence_count": evidence_count + 1 }).to_string()),
+        )
+        .await?;
+        Ok(Some(id))
+    }
+
+    async fn upsert_entity_slot_memory(
+        &self,
+        content: &str,
+        embedding_bytes: &[u8],
+        character_id: &str,
+        importance: f64,
+        metadata: &MemoryMetadata,
+        canonical_hash: &str,
+        now: i64,
+    ) -> Result<Option<i64>> {
+        let Some(entity_key) = metadata.entity_key.as_deref() else {
+            return Ok(None);
+        };
+
+        let row = sqlx::query(
+            "SELECT id, content, importance, evidence_count, first_seen_at FROM memories \
+             WHERE character_id = ? AND memory_type = ? AND entity_key = ? AND status = 'active' \
+             ORDER BY importance DESC, updated_at DESC LIMIT 1",
+        )
+        .bind(character_id)
+        .bind(&metadata.memory_type)
+        .bind(entity_key)
+        .fetch_optional(&self.db)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let id: i64 = row.get("id");
+        let existing_content: String = row.get("content");
+        let existing_importance: f64 = row.get("importance");
+        let evidence_count: i64 = row.get("evidence_count");
+        let first_seen_at: i64 = row.get("first_seen_at");
+        let best_importance = existing_importance.max(importance.clamp(0.0, 1.0));
+        let tier = if best_importance >= 0.8 {
+            "core"
+        } else {
+            "ephemeral"
+        };
+        let merged_content = metadata
+            .canonical_content
+            .as_deref()
+            .unwrap_or(content)
+            .trim()
+            .to_string();
+        let update_embedding = if merged_content == existing_content {
+            None
+        } else {
+            Some(embedding_bytes.to_vec())
+        };
+
+        if let Some(bytes) = update_embedding {
+            sqlx::query(
+                "UPDATE memories \
+                 SET content = ?, embedding = ?, updated_at = ?, importance = ?, tier = ?, confidence = ?, \
+                     last_seen_at = ?, evidence_count = ?, canonical_hash = ? \
+                 WHERE id = ?",
+            )
+            .bind(&merged_content)
+            .bind(bytes)
+            .bind(now)
+            .bind(best_importance)
+            .bind(tier)
+            .bind(DREAM_CONFIDENCE_AUTO_APPLY)
+            .bind(now)
+            .bind(evidence_count.saturating_add(1))
+            .bind(canonical_hash)
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE memories \
+                 SET updated_at = ?, importance = ?, tier = ?, confidence = ?, last_seen_at = ?, evidence_count = ? \
+                 WHERE id = ?",
+            )
+            .bind(now)
+            .bind(best_importance)
+            .bind(tier)
+            .bind(DREAM_CONFIDENCE_AUTO_APPLY)
+            .bind(now)
+            .bind(evidence_count.saturating_add(1))
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        }
+
+        self.record_memory_operation(
+            character_id,
+            "entity_slot_upsert",
+            "memory_pipeline",
+            Some(id),
+            None,
+            Some(serde_json::json!({ "content": existing_content, "first_seen_at": first_seen_at }).to_string()),
+            Some(serde_json::json!({ "content": merged_content, "last_seen_at": now, "evidence_count": evidence_count + 1 }).to_string()),
+        )
+        .await?;
+        Ok(Some(id))
+    }
+
+    async fn insert_active_memory(
+        &self,
+        content: &str,
+        embedding_bytes: Vec<u8>,
+        character_id: &str,
+        importance: f64,
+        metadata: &MemoryMetadata,
+        canonical_hash: &str,
+        now: i64,
+    ) -> Result<i64> {
+        let clamped = importance.clamp(0.0, 1.0);
+        let tier = if clamped >= 0.8 { "core" } else { "ephemeral" };
+        let storage_content = metadata
+            .canonical_content
+            .as_deref()
+            .unwrap_or(content)
+            .trim()
+            .to_string();
+
+        let result = sqlx::query(
+            "INSERT INTO memories \
+             (content, embedding, created_at, updated_at, importance, character_id, tier, \
+              memory_type, entity_key, status, confidence, first_seen_at, last_seen_at, evidence_count, \
+              source_kind, source_refs, canonical_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 1, 'extractor', '[]', ?)",
+        )
+        .bind(&storage_content)
+        .bind(embedding_bytes)
+        .bind(now)
+        .bind(now)
+        .bind(clamped)
+        .bind(character_id)
+        .bind(tier)
+        .bind(&metadata.memory_type)
+        .bind(metadata.entity_key.as_deref())
+        .bind(DREAM_CONFIDENCE_AUTO_APPLY)
+        .bind(now)
+        .bind(now)
+        .bind(canonical_hash)
+        .execute(&self.db)
+        .await?;
+
+        let id = result.last_insert_rowid();
+        self.record_memory_operation(
+            character_id,
+            "insert_active",
+            "memory_pipeline",
+            Some(id),
+            None,
+            None,
+            Some(serde_json::json!({ "content": storage_content, "memory_type": metadata.memory_type, "entity_key": metadata.entity_key }).to_string()),
+        )
+        .await?;
+        Ok(id)
     }
 
     /// Return all memory content strings for a given character (used for dedup in extraction).
     pub async fn get_all_memory_contents(&self, character_id: &str) -> Result<Vec<String>> {
         let rows = sqlx::query(
-            "SELECT content FROM memories WHERE character_id = ? ORDER BY importance DESC LIMIT 50",
+            "SELECT content FROM memories WHERE character_id = ? AND tier != 'invalidated' AND status = 'active' ORDER BY importance DESC LIMIT 50",
         )
         .bind(character_id)
         .fetch_all(&self.db)
         .await?;
         Ok(rows.iter().map(|r| r.get::<String, _>("content")).collect())
-    }
-
-    /// Check for duplicate memories. If a near-duplicate exists (similarity > threshold),
-    /// refresh its timestamp instead of inserting a new row. Returns true if deduplicated.
-    async fn deduplicate_or_refresh(
-        &self,
-        new_embedding: &[f32],
-        character_id: &str,
-        now: i64,
-    ) -> Result<bool> {
-        let rows = sqlx::query("SELECT id, embedding FROM memories WHERE character_id = ?")
-            .bind(character_id)
-            .fetch_all(&self.db)
-            .await?;
-
-        for row in rows {
-            let existing_bytes: Vec<u8> = row.get("embedding");
-            let existing: Vec<f32> = bincode::deserialize(&existing_bytes)?;
-            let sim = cosine_similarity(new_embedding, &existing);
-            if sim > DEDUP_THRESHOLD {
-                let id: i64 = row.get("id");
-                tracing::info!(
-                    target: "memory",
-                    "[Memory] Dedup: similarity={:.3} > {:.3}, refreshing id={}",
-                    sim, DEDUP_THRESHOLD, id
-                );
-                // Refresh updated_at only — created_at must remain immutable
-                sqlx::query("UPDATE memories SET updated_at = ? WHERE id = ?")
-                    .bind(now)
-                    .bind(id)
-                    .execute(&self.db)
-                    .await?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     /// Like `deduplicate_or_refresh`, but also upgrades importance and tier if the
@@ -1806,7 +2401,7 @@ impl MemoryManager {
         new_importance: f64,
     ) -> Result<bool> {
         let rows =
-            sqlx::query("SELECT id, embedding, importance FROM memories WHERE character_id = ?")
+            sqlx::query("SELECT id, embedding, importance FROM memories WHERE character_id = ? AND tier != 'invalidated' AND status = 'active'")
                 .bind(character_id)
                 .fetch_all(&self.db)
                 .await?;
@@ -2033,7 +2628,7 @@ impl MemoryManager {
         let query_embedding = self.embed(query).await?;
 
         let rows =
-            sqlx::query("SELECT id, content, embedding, created_at, importance, tier FROM memories WHERE character_id = ? AND tier != 'invalidated'")
+            sqlx::query("SELECT id, content, embedding, created_at, importance, tier FROM memories WHERE character_id = ? AND tier != 'invalidated' AND status = 'active'")
                 .bind(character_id)
                 .fetch_all(&self.db)
                 .await?;
@@ -2101,7 +2696,7 @@ impl MemoryManager {
             "SELECT m.id, bm25(memories_fts) AS score \
              FROM memories_fts f \
              JOIN memories m ON m.id = f.rowid \
-             WHERE memories_fts MATCH ? AND m.character_id = ? \
+             WHERE memories_fts MATCH ? AND m.character_id = ? AND m.tier != 'invalidated' AND m.status = 'active' \
              ORDER BY score \
              LIMIT ?",
         )
@@ -2124,7 +2719,7 @@ impl MemoryManager {
     /// Fetch a single memory snippet by ID.
     async fn fetch_memory_snippet(&self, id: i64) -> Result<Option<MemorySnippet>> {
         let row = sqlx::query(
-            "SELECT id, content, embedding, created_at, importance, tier FROM memories WHERE id = ?",
+            "SELECT id, content, embedding, created_at, importance, tier FROM memories WHERE id = ? AND tier != 'invalidated' AND status = 'active'",
         )
         .bind(id)
         .fetch_optional(&self.db)
@@ -2460,38 +3055,76 @@ impl MemoryManager {
         character_id: &str,
         importance: f64,
     ) -> Result<()> {
-        let embedding = self.embed(content).await?;
+        let metadata = infer_memory_metadata(content);
+        let storage_probe = metadata.canonical_content.as_deref().unwrap_or(content);
+        let hash = canonical_hash(storage_probe);
+        let embedding = self.embed(storage_probe).await?;
         let embedding_bytes: Vec<u8> = bincode::serialize(&embedding)?;
-        let now = chrono::Utc::now().timestamp();
+        let now = now_ts();
+        let candidate_id = self
+            .insert_memory_candidate(
+                content,
+                character_id,
+                importance,
+                DREAM_CONFIDENCE_AUTO_APPLY,
+                &metadata,
+                &hash,
+                now,
+            )
+            .await?;
+
+        if let Some(id) = self
+            .refresh_exact_duplicate_by_hash(character_id, &hash, now, importance)
+            .await?
+        {
+            self.mark_candidate_decision(candidate_id, "duplicate", Some(id))
+                .await?;
+            return Ok(());
+        }
+
+        if let Some(id) = self
+            .upsert_entity_slot_memory(
+                content,
+                &embedding_bytes,
+                character_id,
+                importance,
+                &metadata,
+                &hash,
+                now,
+            )
+            .await?
+        {
+            self.mark_candidate_decision(candidate_id, "updated", Some(id))
+                .await?;
+            return Ok(());
+        }
 
         // Deduplication check — also upgrades importance/tier if duplicate found
         if let Ok(true) = self
             .deduplicate_or_upgrade(&embedding, character_id, now, importance)
             .await
         {
+            self.mark_candidate_decision(candidate_id, "semantic_duplicate", None)
+                .await?;
             return Ok(());
         }
 
-        let tier = if importance >= 0.8 {
-            "core"
-        } else {
-            "ephemeral"
-        };
+        let memory_id = self
+            .insert_active_memory(
+                content,
+                embedding_bytes,
+                character_id,
+                importance,
+                &metadata,
+                &hash,
+                now,
+            )
+            .await?;
+        self.mark_candidate_decision(candidate_id, "inserted", Some(memory_id))
+            .await?;
 
-        sqlx::query(
-            "INSERT INTO memories (content, embedding, created_at, updated_at, importance, character_id, tier) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(content)
-        .bind(embedding_bytes)
-        .bind(now)
-        .bind(now)
-        .bind(importance.clamp(0.0, 1.0))
-        .bind(character_id)
-        .bind(tier)
-        .execute(&self.db)
-        .await?;
-
-        // After inserting, check for contradiction with existing memories in the 0.70-0.95 band
+        // After inserting, check for contradiction with existing memories in the 0.70-0.95 band.
+        // The v2 path records review proposals instead of hiding old memories immediately.
         let _ = self
             .check_and_invalidate_contradictions(content, &embedding, character_id)
             .await;
@@ -2500,10 +3133,10 @@ impl MemoryManager {
     }
 
     /// After storing a new memory, scan existing memories in the CONTRADICTION_BAND
-    /// (similarity 0.70–0.95) and mark those that appear to contradict the new fact
-    /// as 'invalidated' so they won't be retrieved in future searches.
+    /// (similarity 0.70–0.95) and create review proposals for likely contradictions.
     ///
-    /// Uses a lightweight negation-keyword heuristic — no LLM call needed.
+    /// Uses a lightweight negation-keyword heuristic — no LLM call needed. Dream Memory v2
+    /// keeps the old memory active until a proposal is reviewed.
     pub async fn check_and_invalidate_contradictions(
         &self,
         new_content: &str,
@@ -2512,7 +3145,7 @@ impl MemoryManager {
     ) -> Result<usize> {
         let rows = sqlx::query(
             "SELECT id, content, embedding FROM memories \
-             WHERE character_id = ? AND tier != 'invalidated' \
+             WHERE character_id = ? AND tier != 'invalidated' AND status = 'active' \
              AND created_at >= ? \
              ORDER BY created_at DESC LIMIT 200",
         )
@@ -2533,17 +3166,25 @@ impl MemoryManager {
                 let existing_content: String = row.get("content");
                 if is_likely_contradiction(new_content, &existing_content) {
                     let id: i64 = row.get("id");
-                    sqlx::query(
-                        "UPDATE memories SET tier = 'invalidated', updated_at = ? WHERE id = ?",
+                    self.create_dream_proposal(
+                        character_id,
+                        "conflict_review",
+                        "pending",
+                        f64::from(sim),
+                        "Review possible memory conflict",
+                        "A new memory appears to contradict an existing active memory.",
+                        &[id],
+                        Some(id),
+                        Some(new_content),
+                        None,
+                        None,
+                        "Manual review required before invalidating or replacing the older memory.",
                     )
-                    .bind(chrono::Utc::now().timestamp())
-                    .bind(id)
-                    .execute(&self.db)
                     .await?;
                     invalidated += 1;
                     tracing::info!(
                         target: "memory",
-                        "[Memory] Invalidated contradicting memory id={}: '{}'",
+                        "[Memory] Created conflict proposal for memory id={}: '{}'",
                         id,
                         &existing_content[..existing_content.len().min(60)]
                     );
@@ -2563,7 +3204,8 @@ impl MemoryManager {
         offset: i64,
     ) -> Result<Vec<MemoryRecord>> {
         let rows = sqlx::query_as::<_, MemoryRow>(
-            "SELECT rowid AS rowid, content, created_at, importance, tier FROM memories WHERE character_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "SELECT rowid AS rowid, content, created_at, importance, tier, memory_type, entity_key, status, confidence, first_seen_at, last_seen_at, evidence_count \
+             FROM memories WHERE character_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT ? OFFSET ?",
         )
         .bind(character_id)
         .bind(limit)
@@ -2588,6 +3230,13 @@ impl MemoryManager {
                     created_at: r.created_at,
                     importance: effective_importance,
                     tier: r.tier,
+                    memory_type: r.memory_type,
+                    entity_key: r.entity_key,
+                    status: r.status,
+                    confidence: r.confidence,
+                    first_seen_at: r.first_seen_at,
+                    last_seen_at: r.last_seen_at,
+                    evidence_count: r.evidence_count,
                 }
             })
             .collect())
@@ -2595,10 +3244,12 @@ impl MemoryManager {
 
     /// Count total memories for a character.
     pub async fn count_memories(&self, character_id: &str) -> Result<i64> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM memories WHERE character_id = ?")
-            .bind(character_id)
-            .fetch_one(&self.db)
-            .await?;
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM memories WHERE character_id = ? AND status = 'active'",
+        )
+        .bind(character_id)
+        .fetch_one(&self.db)
+        .await?;
         Ok(row.0)
     }
 
@@ -2609,14 +3260,22 @@ impl MemoryManager {
         let embedding_bytes: Vec<u8> = bincode::serialize(&embedding)?;
         let clamped = importance.clamp(0.0, 1.0);
         let tier = if clamped >= 0.8 { "core" } else { "ephemeral" };
+        let metadata = infer_memory_metadata(content);
+        let hash = canonical_hash(metadata.canonical_content.as_deref().unwrap_or(content));
+        let now = now_ts();
 
         sqlx::query(
-            "UPDATE memories SET content = ?, embedding = ?, importance = ?, tier = ? WHERE rowid = ?",
+            "UPDATE memories SET content = ?, embedding = ?, importance = ?, tier = ?, memory_type = ?, entity_key = ?, canonical_hash = ?, updated_at = ?, last_seen_at = ? WHERE rowid = ?",
         )
         .bind(content)
         .bind(embedding_bytes)
         .bind(clamped)
         .bind(tier)
+        .bind(metadata.memory_type)
+        .bind(metadata.entity_key)
+        .bind(hash)
+        .bind(now)
+        .bind(now)
         .bind(id)
         .execute(&self.db)
         .await?;
@@ -2626,7 +3285,8 @@ impl MemoryManager {
 
     /// Delete a memory by ID.
     pub async fn delete_memory(&self, id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM memories WHERE rowid = ?")
+        sqlx::query("UPDATE memories SET status = 'archived', updated_at = ? WHERE rowid = ?")
+            .bind(now_ts())
             .bind(id)
             .execute(&self.db)
             .await?;
@@ -2635,11 +3295,1041 @@ impl MemoryManager {
 
     /// Update a memory's tier (e.g. "core" or "ephemeral").
     pub async fn update_memory_tier(&self, id: i64, tier: &str) -> Result<()> {
-        sqlx::query("UPDATE memories SET tier = ? WHERE rowid = ?")
+        sqlx::query("UPDATE memories SET tier = ?, updated_at = ? WHERE rowid = ?")
             .bind(tier)
+            .bind(now_ts())
             .bind(id)
             .execute(&self.db)
             .await?;
+        Ok(())
+    }
+
+    async fn create_dream_proposal(
+        &self,
+        character_id: &str,
+        proposal_type: &str,
+        status: &str,
+        confidence: f64,
+        title: &str,
+        rationale: &str,
+        source_memory_ids: &[i64],
+        target_memory_id: Option<i64>,
+        proposed_content: Option<&str>,
+        proposed_memory_type: Option<&str>,
+        proposed_entity_key: Option<&str>,
+        impact: &str,
+    ) -> Result<i64> {
+        let now = now_ts();
+        let applied_at = if matches!(status, "auto_applied" | "approved") {
+            Some(now)
+        } else {
+            None
+        };
+        let result = sqlx::query(
+            "INSERT INTO memory_dream_proposals \
+             (character_id, proposal_type, status, confidence, title, rationale, source_memory_ids, \
+              target_memory_id, proposed_content, proposed_memory_type, proposed_entity_key, impact, \
+              created_at, updated_at, applied_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(character_id)
+        .bind(proposal_type)
+        .bind(status)
+        .bind(confidence.clamp(0.0, 1.0))
+        .bind(title)
+        .bind(rationale)
+        .bind(proposal_ids_json(source_memory_ids)?)
+        .bind(target_memory_id)
+        .bind(proposed_content)
+        .bind(proposed_memory_type)
+        .bind(proposed_entity_key)
+        .bind(impact)
+        .bind(now)
+        .bind(now)
+        .bind(applied_at)
+        .execute(&self.db)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    async fn load_dream_entries(&self, character_id: &str) -> Result<Vec<DreamCandidateEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, content, embedding, created_at, updated_at, importance, tier, memory_type, \
+                    entity_key, canonical_hash, evidence_count \
+             FROM memories \
+             WHERE character_id = ? AND tier != 'invalidated' AND status = 'active'",
+        )
+        .bind(character_id)
+        .fetch_all(&self.db)
+        .await?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            let bytes: Vec<u8> = row.get("embedding");
+            let Ok(embedding) = bincode::deserialize::<Vec<f32>>(&bytes) else {
+                continue;
+            };
+            entries.push(DreamCandidateEntry {
+                id: row.get("id"),
+                content: row.get("content"),
+                embedding,
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                importance: row.get("importance"),
+                tier: row.get("tier"),
+                memory_type: row.get("memory_type"),
+                entity_key: row.get("entity_key"),
+                canonical_hash: row.get("canonical_hash"),
+                evidence_count: row.get("evidence_count"),
+            });
+        }
+        Ok(entries)
+    }
+
+    fn choose_dream_keeper<'a>(
+        &self,
+        entries: &'a [&DreamCandidateEntry],
+    ) -> &'a DreamCandidateEntry {
+        entries
+            .iter()
+            .copied()
+            .max_by(|a, b| {
+                let a_core = if a.tier == "core" { 1 } else { 0 };
+                let b_core = if b.tier == "core" { 1 } else { 0 };
+                a_core
+                    .cmp(&b_core)
+                    .then_with(|| {
+                        a.importance
+                            .partial_cmp(&b.importance)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| a.evidence_count.cmp(&b.evidence_count))
+                    .then_with(|| a.updated_at.cmp(&b.updated_at))
+            })
+            .expect("dream keeper requires non-empty entries")
+    }
+
+    fn choose_dream_keeper_with_preference<'a>(
+        &self,
+        entries: &'a [&DreamCandidateEntry],
+        preferred_id: Option<i64>,
+    ) -> &'a DreamCandidateEntry {
+        if let Some(preferred_id) = preferred_id {
+            if let Some(entry) = entries
+                .iter()
+                .copied()
+                .find(|entry| entry.id == preferred_id)
+            {
+                return entry;
+            }
+        }
+        self.choose_dream_keeper(entries)
+    }
+
+    async fn auto_merge_dream_group(
+        &self,
+        character_id: &str,
+        entries: &[&DreamCandidateEntry],
+        proposal_type: &str,
+        title: &str,
+        rationale: &str,
+        confidence: f64,
+        proposed_content_override: Option<&str>,
+        preferred_keeper_id: Option<i64>,
+    ) -> Result<i64> {
+        if entries.len() < 2 {
+            return Ok(0);
+        }
+
+        let keeper = self.choose_dream_keeper_with_preference(entries, preferred_keeper_id);
+        let source_ids: Vec<i64> = entries.iter().map(|entry| entry.id).collect();
+        let superseded_ids: Vec<i64> = source_ids
+            .iter()
+            .copied()
+            .filter(|id| *id != keeper.id)
+            .collect();
+        if superseded_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let evidence_count: i64 = entries
+            .iter()
+            .map(|entry| entry.evidence_count.max(1))
+            .sum();
+        let max_importance = entries
+            .iter()
+            .map(|entry| entry.importance)
+            .fold(0.0_f64, f64::max);
+        let first_seen_at = entries
+            .iter()
+            .map(|entry| entry.created_at)
+            .min()
+            .unwrap_or(keeper.created_at);
+        let last_seen_at = entries
+            .iter()
+            .map(|entry| entry.updated_at.max(entry.created_at))
+            .max()
+            .unwrap_or(keeper.updated_at);
+        let tier = if entries.iter().any(|entry| entry.tier == "core") {
+            "core"
+        } else {
+            "ephemeral"
+        };
+        let metadata = infer_memory_metadata(&keeper.content);
+        let merged_content = proposed_content_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| metadata.canonical_content.clone())
+            .unwrap_or_else(|| keeper.content.clone());
+
+        sqlx::query(
+            "UPDATE memories \
+             SET content = ?, importance = ?, tier = ?, confidence = ?, first_seen_at = ?, \
+                 last_seen_at = ?, evidence_count = ?, updated_at = ?, supersedes = ? \
+             WHERE id = ?",
+        )
+        .bind(&merged_content)
+        .bind(max_importance)
+        .bind(tier)
+        .bind(confidence.clamp(0.0, 1.0))
+        .bind(first_seen_at)
+        .bind(last_seen_at)
+        .bind(evidence_count)
+        .bind(now_ts())
+        .bind(proposal_ids_json(&superseded_ids)?)
+        .bind(keeper.id)
+        .execute(&self.db)
+        .await?;
+
+        for superseded_id in &superseded_ids {
+            sqlx::query(
+                "UPDATE memories SET status = 'superseded', updated_at = ?, supersedes = ? WHERE id = ?",
+            )
+            .bind(now_ts())
+            .bind(proposal_ids_json(&[keeper.id])?)
+            .bind(superseded_id)
+            .execute(&self.db)
+            .await?;
+        }
+
+        let proposal_id = self
+            .create_dream_proposal(
+                character_id,
+                proposal_type,
+                "auto_applied",
+                confidence,
+                title,
+                rationale,
+                &source_ids,
+                Some(keeper.id),
+                Some(&merged_content),
+                Some(&keeper.memory_type),
+                keeper.entity_key.as_deref(),
+                "Auto-merged duplicate active memories; source rows were marked superseded.",
+            )
+            .await?;
+
+        self.record_memory_operation(
+            character_id,
+            proposal_type,
+            "dreaming",
+            Some(keeper.id),
+            Some(proposal_id),
+            Some(serde_json::json!({ "source_memory_ids": source_ids }).to_string()),
+            Some(
+                serde_json::json!({ "keeper_id": keeper.id, "superseded_ids": superseded_ids })
+                    .to_string(),
+            ),
+        )
+        .await?;
+        Ok(1)
+    }
+
+    async fn create_semantic_review_proposal(
+        &self,
+        character_id: &str,
+        a: &DreamCandidateEntry,
+        b: &DreamCandidateEntry,
+        similarity: f32,
+    ) -> Result<i64> {
+        let pair_entries = [a, b];
+        let keeper = self.choose_dream_keeper(&pair_entries);
+        self.create_dream_proposal(
+            character_id,
+            "semantic_review",
+            "pending",
+            f64::from(similarity),
+            "Review similar memories",
+            "These memories are semantically similar but below the automatic merge threshold.",
+            &[a.id, b.id],
+            Some(keeper.id),
+            Some(&keeper.content),
+            Some(&keeper.memory_type),
+            keeper.entity_key.as_deref(),
+            "Manual review required before superseding either memory.",
+        )
+        .await
+    }
+
+    fn build_llm_discovery_prompt(
+        &self,
+        entries: &[&DreamCandidateEntry],
+        target_language: Option<&str>,
+    ) -> String {
+        let language_rule = target_language
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|language| {
+                format!(
+                    "Write proposed_content in {language}. Preserve proper nouns and exact user-provided identifiers."
+                )
+            })
+            .unwrap_or_else(|| {
+                "Write proposed_content in the same language as the relevant memories.".to_string()
+            });
+
+        let mut list = String::new();
+        for entry in entries {
+            let created = entry.created_at;
+            let key = entry.entity_key.as_deref().unwrap_or("");
+            let content = strip_structured_memory_prefix(&entry.content);
+            list.push_str(&format!(
+                "- id: {}\n  created_at: {}\n  type: {}\n  key: {}\n  importance: {:.2}\n  content: {}\n",
+                entry.id, created, entry.memory_type, key, entry.importance, content
+            ));
+        }
+
+        format!(
+            "You are the Dream Discovery pass for a long-term memory system.\n\
+             Your job is to discover non-obvious duplicate or mergeable memories that simple embeddings may miss.\n\
+             Look for equivalent meaning across different wording, languages, abstraction levels, aliases, and time phrasing.\n\
+             General preservation rule: when a group represents the same durable history, origin, identity, commitment, preference origin, relationship state, or other personally meaningful milestone, choose the earliest source as canonical_memory_id and treat later repeats as evidence. Use a newer source as canonical only when it is a correction or a clearly better updated fact.\n\
+             Do not propose merges for memories that are merely about the same broad topic.\n\
+             Do not delete or decide final state; only propose review groups.\n\
+             {language_rule}\n\n\
+             Return ONLY JSON in this schema:\n\
+             {{\"proposals\":[{{\"source_memory_ids\":[1,2],\"canonical_memory_id\":1,\"decision\":\"duplicate|merge|conflict|update\",\"confidence\":0.0,\"proposed_content\":\"optional canonical memory\",\"memory_type\":\"optional\",\"entity_key\":\"optional\"}}]}}\n\n\
+             Memory entries:\n{list}"
+        )
+    }
+
+    async fn run_llm_discovery_batch(
+        &self,
+        character_id: &str,
+        entries: &[&DreamCandidateEntry],
+        provider: &std::sync::Arc<dyn crate::llm::provider::LlmProvider>,
+        target_language: Option<&str>,
+    ) -> Result<i64> {
+        use crate::llm::messages::user_text_message;
+
+        if entries.len() < 2 {
+            return Ok(0);
+        }
+
+        let prompt = self.build_llm_discovery_prompt(entries, target_language);
+        let response = provider
+            .chat(vec![user_text_message(prompt)], None)
+            .await
+            .map_err(|error| anyhow::anyhow!("Dream discovery LLM scan failed: {}", error))?;
+        let json = strip_code_fences_for_memory_json(&response);
+        let discovery: DreamDiscoveryResponse = serde_json::from_str(json)
+            .map_err(|error| anyhow::anyhow!("Dream discovery JSON parse failed: {}", error))?;
+
+        let by_id: HashMap<i64, &DreamCandidateEntry> =
+            entries.iter().map(|entry| (entry.id, *entry)).collect();
+        let mut proposals = 0i64;
+        for proposal in discovery.proposals {
+            if proposals >= DREAM_LLM_DISCOVERY_MAX_PROPOSALS_PER_RUN {
+                break;
+            }
+            let confidence = proposal.confidence.clamp(0.0, 1.0);
+            if confidence < DREAM_LLM_DISCOVERY_MIN_CONFIDENCE {
+                continue;
+            }
+
+            let mut source_ids = proposal.source_memory_ids;
+            source_ids.sort_unstable();
+            source_ids.dedup();
+            if source_ids.len() < 2 {
+                continue;
+            }
+            if source_ids.iter().any(|id| !by_id.contains_key(id)) {
+                continue;
+            }
+
+            let source_json = proposal_ids_json(&source_ids)?;
+            let existing: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM memory_dream_proposals \
+                 WHERE character_id = ? AND status = 'pending' AND source_memory_ids = ? \
+                 LIMIT 1",
+            )
+            .bind(character_id)
+            .bind(&source_json)
+            .fetch_optional(&self.db)
+            .await?;
+            if existing.is_some() {
+                continue;
+            }
+
+            let source_entries: Vec<&DreamCandidateEntry> = source_ids
+                .iter()
+                .filter_map(|id| by_id.get(id).copied())
+                .collect();
+            let target = self
+                .choose_dream_keeper_with_preference(&source_entries, proposal.canonical_memory_id);
+            let decision = proposal.decision.trim().to_lowercase();
+            let proposal_type = match decision.as_str() {
+                "conflict" => "llm_discovery_conflict_review",
+                "update" => "llm_discovery_update_review",
+                _ => "llm_discovery_review",
+            };
+            let (title, rationale) = match proposal_type {
+                "llm_discovery_conflict_review" => (
+                    "Review LLM-discovered memory conflict",
+                    "LLM Dream Discovery found a non-obvious possible conflict between these memories.",
+                ),
+                "llm_discovery_update_review" => (
+                    "Review LLM-discovered memory update",
+                    "LLM Dream Discovery found a non-obvious possible update between these memories.",
+                ),
+                _ => (
+                    "Review LLM-discovered memory relation",
+                    "LLM Dream Discovery found a non-obvious relationship between these memories.",
+                ),
+            };
+            let fallback_content = strip_structured_memory_prefix(&target.content).to_string();
+
+            self.create_dream_proposal(
+                character_id,
+                proposal_type,
+                "pending",
+                confidence,
+                title,
+                rationale,
+                &source_ids,
+                Some(target.id),
+                proposal
+                    .proposed_content
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or(Some(fallback_content.as_str())),
+                proposal.memory_type.as_deref().or(Some(&target.memory_type)),
+                proposal.entity_key.as_deref().or(target.entity_key.as_deref()),
+                "Manual review required because this relation was discovered by LLM rather than deterministic similarity.",
+            )
+            .await?;
+            proposals += 1;
+        }
+
+        Ok(proposals)
+    }
+
+    async fn run_llm_discovery_pass(
+        &self,
+        character_id: &str,
+        entries: &[DreamCandidateEntry],
+        provider: Option<&std::sync::Arc<dyn crate::llm::provider::LlmProvider>>,
+        target_language: Option<&str>,
+    ) -> Result<i64> {
+        let Some(provider) = provider else {
+            return Ok(0);
+        };
+        if entries.len() < 2 {
+            return Ok(0);
+        }
+
+        let mut total = 0i64;
+        let step = DREAM_LLM_DISCOVERY_BATCH_SIZE
+            .saturating_sub(DREAM_LLM_DISCOVERY_BATCH_OVERLAP)
+            .max(1);
+        let mut start = 0usize;
+        while start < entries.len() && total < DREAM_LLM_DISCOVERY_MAX_PROPOSALS_PER_RUN {
+            let end = (start + DREAM_LLM_DISCOVERY_BATCH_SIZE).min(entries.len());
+            let batch: Vec<&DreamCandidateEntry> = entries[start..end].iter().collect();
+            match self
+                .run_llm_discovery_batch(character_id, &batch, provider, target_language)
+                .await
+            {
+                Ok(count) => total += count,
+                Err(error) => tracing::warn!(
+                    target: "memory",
+                    "[Memory] Dream discovery batch failed: {}",
+                    error
+                ),
+            }
+            if end == entries.len() {
+                break;
+            }
+            start += step;
+        }
+
+        Ok(total)
+    }
+
+    fn build_dream_pair_prompt(
+        &self,
+        a: &DreamCandidateEntry,
+        b: &DreamCandidateEntry,
+        target_language: Option<&str>,
+    ) -> String {
+        let language_rule = target_language
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|language| {
+                format!(
+                    "Write merged_memory in {language}. Preserve proper nouns and exact user-provided identifiers."
+                )
+            })
+            .unwrap_or_else(|| "Write merged_memory in the same language as the existing memories.".to_string());
+
+        format!(
+            "You are reviewing two long-term memory entries for a desktop companion app.\n\
+             Decide whether they are the same durable fact, a safe merge, a conflict, or distinct.\n\
+             Never mark memories as duplicate merely because they are about the same broad topic.\n\
+             General preservation rule: when the pair represents the same durable history, origin, identity, commitment, preference origin, relationship state, or other personally meaningful milestone, choose the earliest source as canonical_memory_id and preserve that history in merged_memory. Treat later repeats as evidence. Use the newer source as canonical only when it is a correction or clearly better updated fact.\n\
+             {language_rule}\n\n\
+             Return ONLY JSON in this schema:\n\
+             {{\"decision\":\"duplicate|merge|conflict|distinct\",\"confidence\":0.0,\"canonical_memory_id\":1,\"merged_memory\":\"optional\",\"rationale\":\"short\",\"memory_type\":\"optional\",\"entity_key\":\"optional\"}}\n\n\
+             Memory A: {}\n\
+             id: {}\n\
+             type: {}, key: {}\n\n\
+             Memory B: {}\n\
+             id: {}\n\
+             type: {}, key: {}",
+            a.content,
+            a.id,
+            a.memory_type,
+            a.entity_key.as_deref().unwrap_or(""),
+            b.content,
+            b.id,
+            b.memory_type,
+            b.entity_key.as_deref().unwrap_or("")
+        )
+    }
+
+    async fn assess_dream_pair_via_llm(
+        &self,
+        a: &DreamCandidateEntry,
+        b: &DreamCandidateEntry,
+        provider: &std::sync::Arc<dyn crate::llm::provider::LlmProvider>,
+        target_language: Option<&str>,
+    ) -> Result<DreamPairAssessment> {
+        use crate::llm::messages::user_text_message;
+
+        let prompt = self.build_dream_pair_prompt(a, b, target_language);
+        let response = provider
+            .chat(vec![user_text_message(prompt)], None)
+            .await
+            .map_err(|error| anyhow::anyhow!("Dream pair LLM assessment failed: {}", error))?;
+        let json = strip_code_fences_for_memory_json(&response);
+        let assessment: DreamPairAssessment = serde_json::from_str(json).map_err(|error| {
+            anyhow::anyhow!("Dream pair LLM assessment JSON parse failed: {}", error)
+        })?;
+        Ok(assessment)
+    }
+
+    async fn run_dream_pass(
+        &self,
+        character_id: &str,
+        provider: Option<&std::sync::Arc<dyn crate::llm::provider::LlmProvider>>,
+        target_language: Option<&str>,
+    ) -> Result<(i64, i64)> {
+        let entries = self.load_dream_entries(character_id).await?;
+        let mut processed: HashSet<i64> = HashSet::new();
+        let mut auto_applied = 0i64;
+        let mut proposals = 0i64;
+
+        let mut by_hash: HashMap<String, Vec<&DreamCandidateEntry>> = HashMap::new();
+        for entry in &entries {
+            let hash = entry
+                .canonical_hash
+                .clone()
+                .unwrap_or_else(|| canonical_hash(&entry.content));
+            by_hash.entry(hash).or_default().push(entry);
+        }
+        for group in by_hash.values() {
+            if group.len() < 2 || group.iter().any(|entry| processed.contains(&entry.id)) {
+                continue;
+            }
+            auto_applied += self
+                .auto_merge_dream_group(
+                    character_id,
+                    group,
+                    "canonical_duplicate",
+                    "Merged exact duplicate memories",
+                    "Dream Light found duplicate canonical hashes.",
+                    1.0,
+                    None,
+                    None,
+                )
+                .await?;
+            for entry in group {
+                processed.insert(entry.id);
+            }
+        }
+
+        let mut by_entity: HashMap<String, Vec<&DreamCandidateEntry>> = HashMap::new();
+        for entry in &entries {
+            if processed.contains(&entry.id) {
+                continue;
+            }
+            if let Some(key) = &entry.entity_key {
+                by_entity
+                    .entry(format!("{}:{}", entry.memory_type, key))
+                    .or_default()
+                    .push(entry);
+            }
+        }
+        for group in by_entity.values() {
+            if group.len() < 2 {
+                continue;
+            }
+            auto_applied += self
+                .auto_merge_dream_group(
+                    character_id,
+                    group,
+                    "entity_slot_merge",
+                    "Merged duplicate slot memories",
+                    "Dream REM found multiple active memories for the same structured slot.",
+                    DREAM_CONFIDENCE_AUTO_APPLY,
+                    None,
+                    None,
+                )
+                .await?;
+            for entry in group {
+                processed.insert(entry.id);
+            }
+        }
+
+        let mut reviewed_pairs: HashSet<(i64, i64)> = HashSet::new();
+        for (i, a) in entries.iter().enumerate() {
+            if processed.contains(&a.id) {
+                continue;
+            }
+            for b in entries.iter().skip(i + 1) {
+                if processed.contains(&b.id) {
+                    continue;
+                }
+                let pair = if a.id < b.id {
+                    (a.id, b.id)
+                } else {
+                    (b.id, a.id)
+                };
+                if !reviewed_pairs.insert(pair) {
+                    continue;
+                }
+                let sim = cosine_similarity(&a.embedding, &b.embedding);
+                if sim >= DREAM_SEMANTIC_AUTO_MERGE_THRESHOLD {
+                    if let Some(provider) = provider {
+                        match self
+                            .assess_dream_pair_via_llm(a, b, provider, target_language)
+                            .await
+                        {
+                            Ok(assessment) => {
+                                let decision = assessment.decision.trim().to_lowercase();
+                                let confidence = assessment.confidence.clamp(0.0, 1.0);
+                                if matches!(decision.as_str(), "duplicate" | "merge" | "update")
+                                    && confidence >= DREAM_CONFIDENCE_AUTO_APPLY
+                                {
+                                    let pair_entries = [a, b];
+                                    auto_applied += self
+                                        .auto_merge_dream_group(
+                                            character_id,
+                                            &pair_entries,
+                                            "llm_semantic_auto_merge",
+                                            "Merged LLM-confirmed memories",
+                                            assessment
+                                                .rationale
+                                                .as_deref()
+                                                .unwrap_or("LLM confirmed these memories are safely mergeable."),
+                                            confidence,
+                                            assessment.merged_memory.as_deref(),
+                                            assessment.canonical_memory_id,
+                                        )
+                                        .await?;
+                                    processed.insert(a.id);
+                                    processed.insert(b.id);
+                                    break;
+                                }
+
+                                if decision == "conflict" {
+                                    let pair_entries = [a, b];
+                                    let keeper = self.choose_dream_keeper(&pair_entries);
+                                    self.create_dream_proposal(
+                                        character_id,
+                                        "llm_conflict_review",
+                                        "pending",
+                                        confidence,
+                                        "Review LLM-detected memory conflict",
+                                        assessment
+                                            .rationale
+                                            .as_deref()
+                                            .unwrap_or("LLM detected a possible contradiction."),
+                                        &[a.id, b.id],
+                                        Some(keeper.id),
+                                        assessment.merged_memory.as_deref(),
+                                        assessment.memory_type.as_deref(),
+                                        assessment.entity_key.as_deref(),
+                                        "Manual review required before changing either active memory.",
+                                    )
+                                    .await?;
+                                    proposals += 1;
+                                    continue;
+                                }
+
+                                if decision == "distinct" {
+                                    continue;
+                                }
+
+                                let pair_entries = [a, b];
+                                let keeper = self.choose_dream_keeper(&pair_entries);
+                                self.create_dream_proposal(
+                                    character_id,
+                                    "llm_semantic_review",
+                                    "pending",
+                                    confidence,
+                                    "Review LLM memory merge suggestion",
+                                    assessment
+                                        .rationale
+                                        .as_deref()
+                                        .unwrap_or("LLM suggested reviewing these similar memories."),
+                                    &[a.id, b.id],
+                                    Some(keeper.id),
+                                    assessment.merged_memory.as_deref(),
+                                    assessment.memory_type.as_deref(),
+                                    assessment.entity_key.as_deref(),
+                                    "Manual review required because confidence was below the auto-apply threshold.",
+                                )
+                                .await?;
+                                proposals += 1;
+                                continue;
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    target: "memory",
+                                    "[Memory] Dream LLM pair assessment failed; falling back to deterministic merge: {}",
+                                    error
+                                );
+                            }
+                        }
+                    }
+                    let pair_entries = [a, b];
+                    auto_applied += self
+                        .auto_merge_dream_group(
+                            character_id,
+                            &pair_entries,
+                            "semantic_auto_merge",
+                            "Merged highly similar memories",
+                            "Dream Deep found a high-confidence semantic duplicate.",
+                            f64::from(sim),
+                            None,
+                            None,
+                        )
+                        .await?;
+                    processed.insert(a.id);
+                    processed.insert(b.id);
+                    break;
+                } else if sim >= DREAM_SEMANTIC_REVIEW_THRESHOLD {
+                    let existing: Option<i64> = sqlx::query_scalar(
+                        "SELECT id FROM memory_dream_proposals \
+                         WHERE character_id = ? AND status = 'pending' AND source_memory_ids = ? \
+                         LIMIT 1",
+                    )
+                    .bind(character_id)
+                    .bind(proposal_ids_json(&[a.id, b.id])?)
+                    .fetch_optional(&self.db)
+                    .await?;
+                    if existing.is_none() {
+                        self.create_semantic_review_proposal(character_id, a, b, sim)
+                            .await?;
+                        proposals += 1;
+                    }
+                }
+            }
+        }
+
+        proposals += self
+            .run_llm_discovery_pass(character_id, &entries, provider, target_language)
+            .await?;
+
+        Ok((auto_applied, proposals))
+    }
+
+    pub async fn run_dream_now(
+        &self,
+        character_id: &str,
+        trigger: &str,
+    ) -> Result<MemoryDreamRunResult> {
+        self.run_dream_now_with_provider(character_id, trigger, None, None)
+            .await
+    }
+
+    pub async fn run_dream_now_with_provider(
+        &self,
+        character_id: &str,
+        trigger: &str,
+        provider: Option<std::sync::Arc<dyn crate::llm::provider::LlmProvider>>,
+        target_language: Option<String>,
+    ) -> Result<MemoryDreamRunResult> {
+        let started_at = now_ts();
+        let job_id = sqlx::query(
+            "INSERT INTO memory_dream_jobs (character_id, phase, status, trigger, started_at) \
+             VALUES (?, 'full', 'running', ?, ?)",
+        )
+        .bind(character_id)
+        .bind(trigger)
+        .bind(started_at)
+        .execute(&self.db)
+        .await?
+        .last_insert_rowid();
+
+        match self
+            .run_dream_pass(character_id, provider.as_ref(), target_language.as_deref())
+            .await
+        {
+            Ok((auto_applied_count, proposal_count)) => {
+                sqlx::query(
+                    "UPDATE memory_dream_jobs \
+                     SET status = 'ready', finished_at = ?, auto_applied_count = ?, proposal_count = ? \
+                     WHERE id = ?",
+                )
+                .bind(now_ts())
+                .bind(auto_applied_count)
+                .bind(proposal_count)
+                .bind(job_id)
+                .execute(&self.db)
+                .await?;
+                let job = self
+                    .latest_dream_job(character_id)
+                    .await?
+                    .expect("dream job should exist after update");
+                Ok(MemoryDreamRunResult {
+                    job,
+                    auto_applied_count,
+                    proposal_count,
+                })
+            }
+            Err(error) => {
+                sqlx::query(
+                    "UPDATE memory_dream_jobs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",
+                )
+                .bind(now_ts())
+                .bind(error.to_string())
+                .bind(job_id)
+                .execute(&self.db)
+                .await?;
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn latest_dream_job(
+        &self,
+        character_id: &str,
+    ) -> Result<Option<MemoryDreamJobRecord>> {
+        Ok(sqlx::query_as::<_, MemoryDreamJobRecord>(
+            "SELECT id, character_id, phase, status, trigger, started_at, finished_at, \
+                    auto_applied_count, proposal_count, error \
+             FROM memory_dream_jobs WHERE character_id = ? ORDER BY started_at DESC LIMIT 1",
+        )
+        .bind(character_id)
+        .fetch_optional(&self.db)
+        .await?)
+    }
+
+    pub async fn list_dream_jobs(
+        &self,
+        character_id: &str,
+        limit: i64,
+    ) -> Result<Vec<MemoryDreamJobRecord>> {
+        Ok(sqlx::query_as::<_, MemoryDreamJobRecord>(
+            "SELECT id, character_id, phase, status, trigger, started_at, finished_at, \
+                    auto_applied_count, proposal_count, error \
+             FROM memory_dream_jobs WHERE character_id = ? ORDER BY started_at DESC LIMIT ?",
+        )
+        .bind(character_id)
+        .bind(limit)
+        .fetch_all(&self.db)
+        .await?)
+    }
+
+    pub async fn list_dream_proposals(
+        &self,
+        character_id: &str,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<MemoryDreamProposalRecord>> {
+        let status = status.unwrap_or("pending");
+        let rows = sqlx::query_as::<_, MemoryDreamProposalRow>(
+            "SELECT id, character_id, proposal_type, status, confidence, title, rationale, \
+                    source_memory_ids, target_memory_id, proposed_content, proposed_memory_type, \
+                    proposed_entity_key, impact, created_at, updated_at, applied_at \
+             FROM memory_dream_proposals \
+             WHERE character_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(character_id)
+        .bind(status)
+        .bind(limit)
+        .fetch_all(&self.db)
+        .await?;
+
+        let mut proposals = Vec::with_capacity(rows.len());
+        for row in rows {
+            let source_ids = parse_proposal_ids(&row.source_memory_ids);
+            let source_memories = self.load_dream_source_memories(&source_ids).await?;
+            proposals.push(row.into_record(source_memories));
+        }
+
+        Ok(proposals)
+    }
+
+    async fn load_dream_source_memories(
+        &self,
+        source_ids: &[i64],
+    ) -> Result<Vec<MemoryDreamSourceRecord>> {
+        let mut memories = Vec::with_capacity(source_ids.len());
+        for id in source_ids {
+            if let Some(memory) = sqlx::query_as::<_, MemoryDreamSourceRecord>(
+                "SELECT id, content, created_at, updated_at, importance, tier, memory_type, \
+                        entity_key, status \
+                 FROM memories WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_optional(&self.db)
+            .await?
+            {
+                memories.push(memory);
+            }
+        }
+        Ok(memories)
+    }
+
+    pub async fn dreaming_summary(&self, character_id: &str) -> Result<MemoryDreamingSummary> {
+        let latest_job = self.latest_dream_job(character_id).await?;
+        let pending_proposal_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_dream_proposals WHERE character_id = ? AND status = 'pending'",
+        )
+        .bind(character_id)
+        .fetch_one(&self.db)
+        .await?;
+        let auto_applied_proposal_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_dream_proposals WHERE character_id = ? AND status = 'auto_applied'",
+        )
+        .bind(character_id)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(MemoryDreamingSummary {
+            latest_job,
+            pending_proposal_count,
+            auto_applied_proposal_count,
+        })
+    }
+
+    pub async fn reject_dream_proposal(&self, proposal_id: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE memory_dream_proposals SET status = 'rejected', updated_at = ? WHERE id = ? AND status = 'pending'",
+        )
+        .bind(now_ts())
+        .bind(proposal_id)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn approve_dream_proposal(&self, proposal_id: i64) -> Result<()> {
+        let proposal = sqlx::query_as::<_, MemoryDreamProposalRow>(
+            "SELECT id, character_id, proposal_type, status, confidence, title, rationale, \
+                    source_memory_ids, target_memory_id, proposed_content, proposed_memory_type, \
+                    proposed_entity_key, impact, created_at, updated_at, applied_at \
+             FROM memory_dream_proposals WHERE id = ?",
+        )
+        .bind(proposal_id)
+        .fetch_optional(&self.db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("dream proposal not found"))?;
+
+        if proposal.status != "pending" {
+            return Ok(());
+        }
+
+        let source_ids = parse_proposal_ids(&proposal.source_memory_ids);
+        let target_id = proposal
+            .target_memory_id
+            .or_else(|| source_ids.first().copied())
+            .ok_or_else(|| anyhow::anyhow!("dream proposal has no target memory"))?;
+        let now = now_ts();
+
+        if let Some(content) = proposal.proposed_content.as_deref() {
+            let embedding = self.embed(content).await?;
+            let embedding_bytes = bincode::serialize(&embedding)?;
+            let metadata = MemoryMetadata {
+                memory_type: proposal
+                    .proposed_memory_type
+                    .clone()
+                    .unwrap_or_else(|| "fact".to_string()),
+                entity_key: proposal.proposed_entity_key.clone(),
+                canonical_content: None,
+            };
+            sqlx::query(
+                "UPDATE memories SET content = ?, embedding = ?, memory_type = ?, entity_key = ?, \
+                    canonical_hash = ?, confidence = ?, updated_at = ?, last_seen_at = ?, status = 'active' \
+                 WHERE id = ?",
+            )
+            .bind(content)
+            .bind(embedding_bytes)
+            .bind(metadata.memory_type)
+            .bind(metadata.entity_key)
+            .bind(canonical_hash(content))
+            .bind(proposal.confidence)
+            .bind(now)
+            .bind(now)
+            .bind(target_id)
+            .execute(&self.db)
+            .await?;
+        }
+
+        let superseded_ids: Vec<i64> = source_ids
+            .iter()
+            .copied()
+            .filter(|id| *id != target_id)
+            .collect();
+        if !superseded_ids.is_empty() {
+            for superseded_id in &superseded_ids {
+                sqlx::query(
+                    "UPDATE memories SET status = 'superseded', updated_at = ?, supersedes = ? WHERE id = ?",
+                )
+                .bind(now)
+                .bind(proposal_ids_json(&[target_id])?)
+                .bind(superseded_id)
+                .execute(&self.db)
+                .await?;
+            }
+        }
+
+        sqlx::query(
+            "UPDATE memory_dream_proposals SET status = 'approved', updated_at = ?, applied_at = ? WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(proposal_id)
+        .execute(&self.db)
+        .await?;
+
+        self.record_memory_operation(
+            &proposal.character_id,
+            &proposal.proposal_type,
+            "user",
+            Some(target_id),
+            Some(proposal_id),
+            Some(serde_json::json!({ "source_memory_ids": source_ids }).to_string()),
+            Some(
+                serde_json::json!({ "target_id": target_id, "superseded_ids": superseded_ids })
+                    .to_string(),
+            ),
+        )
+        .await?;
         Ok(())
     }
 
@@ -2660,7 +4350,7 @@ impl MemoryManager {
         // We do the exact per-row check in Rust to handle varying importance values.
         let rows = sqlx::query(
             "SELECT rowid, created_at, importance FROM memories \
-             WHERE character_id = ? AND tier = 'ephemeral' AND created_at < ?",
+             WHERE character_id = ? AND tier = 'ephemeral' AND status = 'active' AND created_at < ?",
         )
         .bind(character_id)
         .bind(cutoff_ts)
@@ -2675,10 +4365,13 @@ impl MemoryManager {
             let age_days = (now - created_at) as f64 / 86400.0;
             let decay = (0.5_f64).powf(age_days / MEMORY_HALF_LIFE_DAYS);
             if importance * decay < threshold {
-                sqlx::query("DELETE FROM memories WHERE rowid = ?")
-                    .bind(id)
-                    .execute(&self.db)
-                    .await?;
+                sqlx::query(
+                    "UPDATE memories SET status = 'archived', updated_at = ? WHERE rowid = ?",
+                )
+                .bind(now)
+                .bind(id)
+                .execute(&self.db)
+                .await?;
                 deleted += 1;
             }
         }
@@ -2716,118 +4409,135 @@ impl MemoryManager {
         provider: std::sync::Arc<dyn crate::llm::provider::LlmProvider>,
         target_language: Option<String>,
     ) -> Result<usize> {
-        // 1. Load all memories with embeddings for this character
-        let rows = sqlx::query(
+        let result = self
+            .run_dream_now_with_provider(
+                character_id,
+                "periodic_consolidation",
+                Some(provider.clone()),
+                target_language.clone(),
+            )
+            .await?;
+        return Ok((result.auto_applied_count + result.proposal_count) as usize);
+
+        #[allow(unreachable_code)]
+        {
+            // 1. Load all memories with embeddings for this character
+            let rows = sqlx::query(
             "SELECT id, content, embedding, created_at, importance, tier FROM memories WHERE character_id = ?",
         )
         .bind(character_id)
         .fetch_all(&self.db)
         .await?;
 
-        if rows.len() < 2 {
-            return Ok(0);
-        }
-
-        // Parse into (id, content, embedding, importance, tier, created_at)
-        let mut entries: Vec<(i64, String, Vec<f32>, f64, String, i64)> = Vec::new();
-        for row in &rows {
-            let embedding_bytes: Vec<u8> = row.get("embedding");
-            let embedding: Vec<f32> = bincode::deserialize(&embedding_bytes)?;
-            entries.push((
-                row.get("id"),
-                row.get("content"),
-                embedding,
-                row.get("importance"),
-                row.get("tier"),
-                row.get("created_at"),
-            ));
-        }
-
-        // 2. Greedy clustering: group similar memories
-        let mut used = vec![false; entries.len()];
-        let mut clusters: Vec<Vec<usize>> = Vec::new();
-
-        for i in 0..entries.len() {
-            if used[i] {
-                continue;
+            if rows.len() < 2 {
+                return Ok(0);
             }
-            let mut cluster = vec![i];
-            used[i] = true;
 
-            for j in (i + 1)..entries.len() {
-                if used[j] || cluster.len() >= MAX_CLUSTER_SIZE {
-                    break;
+            // Parse into (id, content, embedding, importance, tier, created_at)
+            let mut entries: Vec<(i64, String, Vec<f32>, f64, String, i64)> = Vec::new();
+            for row in &rows {
+                let embedding_bytes: Vec<u8> = row.get("embedding");
+                let embedding: Vec<f32> = bincode::deserialize(&embedding_bytes)?;
+                entries.push((
+                    row.get("id"),
+                    row.get("content"),
+                    embedding,
+                    row.get("importance"),
+                    row.get("tier"),
+                    row.get("created_at"),
+                ));
+            }
+
+            // 2. Greedy clustering: group similar memories
+            let mut used = vec![false; entries.len()];
+            let mut clusters: Vec<Vec<usize>> = Vec::new();
+
+            for i in 0..entries.len() {
+                if used[i] {
+                    continue;
                 }
-                let sim = cosine_similarity(&entries[i].2, &entries[j].2);
-                let time_diff = (entries[i].5 - entries[j].5).abs();
-                if sim > CONSOLIDATION_THRESHOLD && time_diff <= CONSOLIDATION_TIME_WINDOW_SECS {
-                    cluster.push(j);
-                    used[j] = true;
+                let mut cluster = vec![i];
+                used[i] = true;
+
+                for j in (i + 1)..entries.len() {
+                    if used[j] || cluster.len() >= MAX_CLUSTER_SIZE {
+                        break;
+                    }
+                    let sim = cosine_similarity(&entries[i].2, &entries[j].2);
+                    let time_diff = (entries[i].5 - entries[j].5).abs();
+                    if sim > CONSOLIDATION_THRESHOLD && time_diff <= CONSOLIDATION_TIME_WINDOW_SECS
+                    {
+                        cluster.push(j);
+                        used[j] = true;
+                    }
+                }
+
+                // Only consolidate clusters with 2+ memories
+                if cluster.len() >= 2 {
+                    clusters.push(cluster);
                 }
             }
 
-            // Only consolidate clusters with 2+ memories
-            if cluster.len() >= 2 {
-                clusters.push(cluster);
+            if clusters.is_empty() {
+                return Ok(0);
             }
-        }
 
-        if clusters.is_empty() {
-            return Ok(0);
-        }
+            let mut consolidated_count = 0;
 
-        let mut consolidated_count = 0;
+            // 3. For each cluster, merge via LLM
+            for cluster in &clusters {
+                let facts: Vec<&str> = cluster.iter().map(|&idx| entries[idx].1.as_str()).collect();
+                let source_ids: Vec<i64> = cluster.iter().map(|&idx| entries[idx].0).collect();
 
-        // 3. For each cluster, merge via LLM
-        for cluster in &clusters {
-            let facts: Vec<&str> = cluster.iter().map(|&idx| entries[idx].1.as_str()).collect();
-            let source_ids: Vec<i64> = cluster.iter().map(|&idx| entries[idx].0).collect();
+                // Inherit max importance; if any is core, result is core
+                let max_importance = cluster
+                    .iter()
+                    .map(|&idx| entries[idx].3)
+                    .fold(0.0_f64, f64::max);
+                let tier = if cluster.iter().any(|&idx| entries[idx].4 == "core") {
+                    "core"
+                } else {
+                    "ephemeral"
+                };
+                // 保留最早的 created_at，避免整合后记忆时间被重置
+                let earliest_created_at = cluster
+                    .iter()
+                    .map(|&idx| entries[idx].5)
+                    .min()
+                    .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
-            // Inherit max importance; if any is core, result is core
-            let max_importance = cluster
-                .iter()
-                .map(|&idx| entries[idx].3)
-                .fold(0.0_f64, f64::max);
-            let tier = if cluster.iter().any(|&idx| entries[idx].4 == "core") {
-                "core"
-            } else {
-                "ephemeral"
-            };
-            // 保留最早的 created_at，避免整合后记忆时间被重置
-            let earliest_created_at = cluster
-                .iter()
-                .map(|&idx| entries[idx].5)
-                .min()
-                .unwrap_or_else(|| chrono::Utc::now().timestamp());
-
-            // Call LLM to merge facts
-            let merged = match merge_facts_via_llm(&facts, &provider, target_language.as_deref())
+                // Call LLM to merge facts
+                let merged = match merge_facts_via_llm(
+                    &facts,
+                    &provider,
+                    target_language.as_deref(),
+                )
                 .await
-            {
-                Ok(text) => text,
-                Err(e) => {
-                    tracing::error!(target: "memory", "[Memory] Consolidation LLM call failed: {}", e);
+                {
+                    Ok(text) => text,
+                    Err(e) => {
+                        tracing::error!(target: "memory", "[Memory] Consolidation LLM call failed: {}", e);
+                        continue;
+                    }
+                };
+
+                if merged.trim().is_empty() {
                     continue;
                 }
-            };
 
-            if merged.trim().is_empty() {
-                continue;
-            }
+                // 4. Insert consolidated memory
+                let embedding = match self.embed(&merged).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::error!(target: "memory", "[Memory] Failed to embed consolidated memory: {}", e);
+                        continue;
+                    }
+                };
+                let embedding_bytes: Vec<u8> = bincode::serialize(&embedding)?;
+                let now = chrono::Utc::now().timestamp();
+                let consolidated_from_json = serde_json::to_string(&source_ids)?;
 
-            // 4. Insert consolidated memory
-            let embedding = match self.embed(&merged).await {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::error!(target: "memory", "[Memory] Failed to embed consolidated memory: {}", e);
-                    continue;
-                }
-            };
-            let embedding_bytes: Vec<u8> = bincode::serialize(&embedding)?;
-            let now = chrono::Utc::now().timestamp();
-            let consolidated_from_json = serde_json::to_string(&source_ids)?;
-
-            sqlx::query(
+                sqlx::query(
                 "INSERT INTO memories (content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
@@ -2842,24 +4552,25 @@ impl MemoryManager {
             .execute(&self.db)
             .await?;
 
-            // 5. Delete source memories
-            for id in &source_ids {
-                sqlx::query("DELETE FROM memories WHERE id = ?")
-                    .bind(id)
-                    .execute(&self.db)
-                    .await?;
+                // 5. Delete source memories
+                for id in &source_ids {
+                    sqlx::query("DELETE FROM memories WHERE id = ?")
+                        .bind(id)
+                        .execute(&self.db)
+                        .await?;
+                }
+
+                consolidated_count += 1;
+                tracing::info!(
+                    target: "memory",
+                    "[Memory] Consolidated {} memories into: {}",
+                    source_ids.len(),
+                    &merged[..merged.len().min(80)]
+                );
             }
 
-            consolidated_count += 1;
-            tracing::info!(
-                target: "memory",
-                "[Memory] Consolidated {} memories into: {}",
-                source_ids.len(),
-                &merged[..merged.len().min(80)]
-            );
+            Ok(consolidated_count)
         }
-
-        Ok(consolidated_count)
     }
 }
 
@@ -2871,6 +4582,13 @@ struct MemoryRow {
     created_at: i64,
     importance: f64,
     tier: String,
+    memory_type: String,
+    entity_key: Option<String>,
+    status: String,
+    confidence: f64,
+    first_seen_at: i64,
+    last_seen_at: i64,
+    evidence_count: i64,
 }
 
 /// Public record type returned to frontend via Tauri commands.
@@ -2881,6 +4599,13 @@ pub struct MemoryRecord {
     pub created_at: i64,
     pub importance: f64,
     pub tier: String,
+    pub memory_type: String,
+    pub entity_key: Option<String>,
+    pub status: String,
+    pub confidence: f64,
+    pub first_seen_at: i64,
+    pub last_seen_at: i64,
+    pub evidence_count: i64,
 }
 
 /// Escape user input for FTS5 MATCH syntax.

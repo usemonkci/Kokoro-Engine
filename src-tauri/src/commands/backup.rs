@@ -25,6 +25,7 @@ const CONFIG_FILES: &[&str] = &[
     "jailbreak_prompt.json",
     "proactive_enabled.json",
     "memory_system_config.json",
+    "memory_upgrade_config.json",
     "emotion_state.json",
     "context_settings.json",
     "current_conversation_id.json",
@@ -582,6 +583,83 @@ pub async fn import_data(
             .debug_log
             .push(format!("import_db.memories count: {}", import_count));
 
+        let import_memory_columns: Vec<String> =
+            sqlx::query("PRAGMA import_db.table_info(memories)")
+                .fetch_all(&mut *conn)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| row.get::<String, _>("name"))
+                .collect();
+        let memory_column_defaults = [
+            ("updated_at", "INTEGER NOT NULL DEFAULT 0"),
+            ("character_id", "TEXT NOT NULL DEFAULT 'default'"),
+            ("tier", "TEXT NOT NULL DEFAULT 'ephemeral'"),
+            ("consolidated_from", "TEXT"),
+            ("memory_type", "TEXT NOT NULL DEFAULT 'legacy_fact'"),
+            ("entity_key", "TEXT"),
+            ("status", "TEXT NOT NULL DEFAULT 'active'"),
+            ("confidence", "REAL NOT NULL DEFAULT 0.6"),
+            ("first_seen_at", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_seen_at", "INTEGER NOT NULL DEFAULT 0"),
+            ("evidence_count", "INTEGER NOT NULL DEFAULT 1"),
+            ("source_kind", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("source_refs", "TEXT NOT NULL DEFAULT '[]'"),
+            ("supersedes", "TEXT"),
+            ("canonical_hash", "TEXT"),
+            ("last_dreamed_at", "INTEGER"),
+        ];
+        for (column, definition) in memory_column_defaults {
+            if !import_memory_columns
+                .iter()
+                .any(|existing| existing == column)
+            {
+                let sql =
+                    format!("ALTER TABLE import_db.memories ADD COLUMN {column} {definition}");
+                sqlx::query(&sql).execute(&mut *conn).await.map_err(|e| {
+                    KokoroError::Database(format!(
+                        "Failed to normalize import memory column {column}: {e}"
+                    ))
+                })?;
+            }
+        }
+        sqlx::query(
+            "UPDATE import_db.memories \
+             SET first_seen_at = CASE WHEN first_seen_at = 0 THEN created_at ELSE first_seen_at END, \
+                 last_seen_at = CASE \
+                    WHEN last_seen_at = 0 AND updated_at > created_at THEN updated_at \
+                    WHEN last_seen_at = 0 THEN created_at \
+                    ELSE last_seen_at \
+                 END, \
+                 canonical_hash = CASE \
+                    WHEN canonical_hash IS NULL OR canonical_hash = '' THEN lower(trim(content)) \
+                    ELSE canonical_hash \
+                 END",
+        )
+        .execute(&mut *conn)
+        .await
+        .ok();
+        sqlx::query(
+            "UPDATE import_db.memories \
+             SET memory_type = CASE \
+                    WHEN substr(content, 1, 6) = '[type:' AND instr(content, ']') > 0 THEN \
+                        CASE \
+                            WHEN instr(content, '|') > 0 AND instr(content, '|') < instr(content, ']') THEN substr(content, 7, instr(content, '|') - 7) \
+                            ELSE substr(content, 7, instr(content, ']') - 7) \
+                        END \
+                    ELSE memory_type \
+                 END, \
+                 entity_key = CASE \
+                    WHEN instr(content, '|key:') > 0 AND instr(content, ']') > instr(content, '|key:') THEN \
+                        substr(content, instr(content, '|key:') + 5, instr(content, ']') - (instr(content, '|key:') + 5)) \
+                    ELSE entity_key \
+                 END \
+             WHERE substr(content, 1, 6) = '[type:'",
+        )
+        .execute(&mut *conn)
+        .await
+        .ok();
+
         // 打印备份里实际的 character_id 分布
         let char_ids: Vec<String> =
             sqlx::query_scalar("SELECT DISTINCT character_id FROM import_db.memories")
@@ -634,6 +712,20 @@ pub async fn import_data(
             "INSERT OR IGNORE INTO conversations (id, character_id, title, topic, pinned_state, created_at, updated_at)
              SELECT id, character_id, title, '' as topic, '{}' as pinned_state, created_at, updated_at FROM import_db.conversations"
         };
+        let memory_insert_sql = "INSERT INTO memories \
+             (id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from, \
+              memory_type, entity_key, status, confidence, first_seen_at, last_seen_at, evidence_count, \
+              source_kind, source_refs, supersedes, canonical_hash, last_dreamed_at) \
+             SELECT id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from, \
+                    memory_type, entity_key, status, confidence, first_seen_at, last_seen_at, evidence_count, \
+                    source_kind, source_refs, supersedes, canonical_hash, last_dreamed_at FROM import_db.memories";
+        let memory_insert_skip_sql = "INSERT OR IGNORE INTO memories \
+             (id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from, \
+              memory_type, entity_key, status, confidence, first_seen_at, last_seen_at, evidence_count, \
+              source_kind, source_refs, supersedes, canonical_hash, last_dreamed_at) \
+             SELECT id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from, \
+                    memory_type, entity_key, status, confidence, first_seen_at, last_seen_at, evidence_count, \
+                    source_kind, source_refs, supersedes, canonical_hash, last_dreamed_at FROM import_db.memories";
 
         if options.conflict_strategy == "overwrite" {
             // 先删除 FTS 触发器，避免批量操作时触发器访问损坏的 FTS 索引
@@ -667,10 +759,7 @@ pub async fn import_data(
                 .await
                 .map_err(|e| KokoroError::Database(format!("DELETE memories failed: {}", e)))?;
 
-            let r = sqlx::query(
-                "INSERT INTO memories (id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from)
-                 SELECT id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from FROM import_db.memories"
-            )
+            let r = sqlx::query(memory_insert_sql)
                 .execute(&mut *conn)
                 .await
                 .map_err(|e| KokoroError::Database(format!("INSERT memories failed: {}", e)))?;
@@ -679,6 +768,32 @@ pub async fn import_data(
             result
                 .debug_log
                 .push(format!("inserted memories: {}", result.imported_memories));
+
+            for table in [
+                "memory_candidates",
+                "memory_evidence",
+                "memory_dream_jobs",
+                "memory_dream_proposals",
+                "memory_operations",
+            ] {
+                let import_has_table: Option<String> = sqlx::query_scalar(
+                    "SELECT name FROM import_db.sqlite_master WHERE type='table' AND name = ?",
+                )
+                .bind(table)
+                .fetch_optional(&mut *conn)
+                .await
+                .unwrap_or(None);
+                if import_has_table.is_some() {
+                    let _ = sqlx::query(&format!("DELETE FROM {table}"))
+                        .execute(&mut *conn)
+                        .await;
+                    let _ = sqlx::query(&format!(
+                        "INSERT INTO {table} SELECT * FROM import_db.{table}"
+                    ))
+                    .execute(&mut *conn)
+                    .await;
+                }
+            }
 
             let r = sqlx::query(conversation_insert_sql)
                 .execute(&mut *conn)
@@ -717,10 +832,7 @@ pub async fn import_data(
                 .await
                 .ok();
 
-            let r = sqlx::query(
-                "INSERT OR IGNORE INTO memories (id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from)
-                 SELECT id, content, embedding, created_at, updated_at, importance, character_id, tier, consolidated_from FROM import_db.memories"
-            )
+            let r = sqlx::query(memory_insert_skip_sql)
                 .execute(&mut *conn)
                 .await
                 .map_err(|e| {
@@ -736,6 +848,29 @@ pub async fn import_data(
                 "inserted memories (skip): {}",
                 result.imported_memories
             ));
+
+            for table in [
+                "memory_candidates",
+                "memory_evidence",
+                "memory_dream_jobs",
+                "memory_dream_proposals",
+                "memory_operations",
+            ] {
+                let import_has_table: Option<String> = sqlx::query_scalar(
+                    "SELECT name FROM import_db.sqlite_master WHERE type='table' AND name = ?",
+                )
+                .bind(table)
+                .fetch_optional(&mut *conn)
+                .await
+                .unwrap_or(None);
+                if import_has_table.is_some() {
+                    let _ = sqlx::query(&format!(
+                        "INSERT OR IGNORE INTO {table} SELECT * FROM import_db.{table}"
+                    ))
+                    .execute(&mut *conn)
+                    .await;
+                }
+            }
 
             let r = sqlx::query(conversation_insert_skip_sql)
                 .execute(&mut *conn)
@@ -786,6 +921,21 @@ pub async fn import_data(
                 .execute(&mut *conn)
                 .await
                 .ok();
+            for table in [
+                "memory_candidates",
+                "memory_evidence",
+                "memory_dream_jobs",
+                "memory_dream_proposals",
+                "memory_operations",
+            ] {
+                let _ = sqlx::query(&format!(
+                    "UPDATE {table} SET character_id = ? WHERE character_id != ?"
+                ))
+                .bind(target_id)
+                .bind(target_id)
+                .execute(&mut *conn)
+                .await;
+            }
         } else {
             result
                 .debug_log

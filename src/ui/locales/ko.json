@@ -521,10 +521,11 @@
                 "desc": "비활성화하면 캐릭터가 기억을 읽거나, 쓰거나, 추출하거나, 정리하지 않습니다. 다시 활성화한 뒤에는 그 이후의 새 대화만 기록합니다.",
                 "disabled_hint": "기억 시스템이 비활성화되었습니다. 기존 기억은 계속 볼 수 있지만 대화에 주입되지 않으며, 새로운 기억·요약·감정 스냅샷도 생성되지 않습니다."
             },
-            "tabs": {
-                "list": "목록",
-                "timeline": "타임라인",
-                "graph": "그래프"
+        "tabs": {
+            "list": "목록",
+            "timeline": "타임라인",
+            "graph": "그래프",
+            "dream": "꿈"
             },
             "search": {
                 "placeholder": "기억 검색..."
@@ -547,13 +548,107 @@
                 "hours_ago": "{{count}}시간 전",
                 "days_ago": "{{count}}일 전"
             },
-            "importance": {
-                "high": "높음",
-                "med": "중간",
-                "low": "낮음"
+        "importance": {
+            "high": "높음",
+            "med": "중간",
+            "low": "낮음"
+        },
+        "dream": {
+            "title": "꿈 정리",
+            "summary": "대기 {{pending}} · 자동 {{auto}}",
+            "refresh": "새로고침",
+            "run_now": "지금 실행",
+            "running": "실행 중",
+            "schedule": {
+                "title": "일일 자동 정리 시간",
+                "hint": "앱이 백그라운드에서 실행 중이면 매일 {{hour}}:00 이후 60초 동안 유휴 상태일 때 꿈 작업을 실행합니다.",
+                "saving": "저장 중",
+                "saved": "저장됨"
             },
-            "upgrade": {
-                "title": "메모리 활동",
+            "latest": {
+                "last": "최근: {{status}}",
+                "auto_applied": "자동 적용: {{count}}",
+                "proposals": "제안: {{count}}"
+            },
+            "empty_proposals": "대기 중인 꿈 제안이 없습니다.",
+            "recent_jobs": "최근 작업",
+            "sources": "출처: {{ids}}",
+            "proposed_content": "제안된 기억",
+            "source_memories": "비교한 원본 기억",
+            "source_memory_id": "기억 #{{id}}",
+            "source_missing": "원본 기억을 더 이상 사용할 수 없습니다.",
+            "entity_key": "키: {{key}}",
+            "actions": {
+                "approve": "승인",
+                "reject": "거부"
+            },
+            "statuses": {
+                "active": "활성",
+                "pending": "대기 중",
+                "ready": "완료",
+                "running": "실행 중",
+                "interrupted": "중단됨",
+                "failed": "실패",
+                "superseded": "대체됨",
+                "archived": "보관됨",
+                "auto_applied": "자동 적용됨",
+                "approved": "승인됨",
+                "rejected": "거부됨"
+            },
+            "job_triggers": {
+                "manual": "수동",
+                "daily_idle": "일일 유휴"
+            },
+            "proposal_types": {
+                "conflict_review": "충돌 검토",
+                "semantic_review": "유사도 검토",
+                "canonical_duplicate": "정확한 중복",
+                "entity_slot_merge": "슬롯 병합",
+                "llm_semantic_auto_merge": "LLM 자동 병합",
+                "llm_conflict_review": "LLM 충돌 검토",
+                "llm_semantic_review": "LLM 병합 검토",
+                "llm_discovery_review": "LLM 꿈 발견",
+                "llm_discovery_conflict_review": "LLM 꿈 충돌",
+                "llm_discovery_update_review": "LLM 꿈 업데이트",
+                "semantic_auto_merge": "의미 자동 병합"
+            },
+            "proposal_titles": {
+                "conflict_review": "가능한 기억 충돌 검토",
+                "semantic_review": "유사한 기억 검토",
+                "canonical_duplicate": "정확히 중복된 기억을 병합했습니다",
+                "entity_slot_merge": "중복 슬롯 기억을 병합했습니다",
+                "llm_semantic_auto_merge": "LLM이 확인한 기억을 병합했습니다",
+                "llm_conflict_review": "LLM이 감지한 기억 충돌 검토",
+                "llm_semantic_review": "LLM의 기억 병합 제안 검토",
+                "llm_discovery_review": "LLM 꿈이 발견한 기억 관계 검토",
+                "llm_discovery_conflict_review": "LLM 꿈이 발견한 기억 충돌 검토",
+                "llm_discovery_update_review": "LLM 꿈이 발견한 기억 업데이트 검토",
+                "semantic_auto_merge": "매우 유사한 기억을 병합했습니다"
+            },
+            "proposal_rationales": {
+                "conflict_review": "새 기억이 기존 활성 기억과 모순되는 것으로 보입니다.",
+                "semantic_review": "이 기억들은 의미적으로 유사하지만 자동 병합 임계값보다 낮습니다.",
+                "canonical_duplicate": "Dream Light가 중복된 정규화 해시를 발견했습니다.",
+                "entity_slot_merge": "Dream REM이 같은 구조화 슬롯에 여러 활성 기억을 발견했습니다.",
+                "llm_semantic_auto_merge": "LLM이 이 기억들을 안전하게 병합할 수 있다고 확인했습니다.",
+                "llm_conflict_review": "LLM이 가능한 모순을 감지했습니다.",
+                "llm_semantic_review": "LLM이 이 유사한 기억들의 검토를 제안했습니다.",
+                "llm_discovery_review": "LLM 꿈이 이 기억들 사이의 비명시적인 관계를 발견했습니다.",
+                "llm_discovery_conflict_review": "LLM 꿈이 이 기억들 사이의 비명시적인 충돌 가능성을 발견했습니다.",
+                "llm_discovery_update_review": "LLM 꿈이 이 기억들 사이의 비명시적인 업데이트 관계를 발견했습니다.",
+                "semantic_auto_merge": "Dream Deep이 높은 신뢰도의 의미 중복을 발견했습니다."
+            },
+            "proposal_impacts": {
+                "conflict_review": "이전 기억을 무효화하거나 교체하기 전에 수동 검토가 필요합니다.",
+                "semantic_review": "어느 한 기억을 대체하기 전에 수동 검토가 필요합니다.",
+                "auto_merged": "중복된 활성 기억을 자동 병합했고, 원본 행은 대체됨으로 표시했습니다.",
+                "llm_conflict_review": "활성 기억을 변경하기 전에 수동 검토가 필요합니다.",
+                "llm_semantic_review": "신뢰도가 자동 적용 임계값보다 낮아 수동 검토가 필요합니다.",
+                "llm_discovery_review": "이 관계는 결정적 유사도가 아니라 LLM 꿈으로 발견되었으므로 수동 검토가 필요합니다."
+            }
+        },
+        "upgrade": {
+            "title": "메모리 활동",
                 "loading": "메모리 텔레메트리를 불러오는 중...",
                 "write_events": "쓰기 이벤트",
                 "retrieval_logs": "검색 로그",

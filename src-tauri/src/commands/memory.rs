@@ -1,5 +1,6 @@
 use crate::ai::context::AIOrchestrator;
 use crate::error::KokoroError;
+use crate::llm::service::LlmService;
 use serde::Deserialize;
 use tauri::State;
 
@@ -102,6 +103,120 @@ pub async fn update_memory_tier(
     state
         .memory_manager
         .update_memory_tier(request.id, &request.tier)
+        .await
+        .map_err(|e| KokoroError::Database(e.to_string()))
+}
+
+#[derive(Deserialize)]
+pub struct DreamCharacterRequest {
+    pub character_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct ListDreamJobsRequest {
+    pub character_id: String,
+    #[serde(default = "default_dream_limit")]
+    pub limit: i64,
+}
+
+#[derive(Deserialize)]
+pub struct ListDreamProposalsRequest {
+    pub character_id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default = "default_dream_limit")]
+    pub limit: i64,
+}
+
+#[derive(Deserialize)]
+pub struct DreamProposalRequest {
+    pub id: i64,
+}
+
+fn default_dream_limit() -> i64 {
+    50
+}
+
+#[tauri::command]
+pub async fn run_dream_now(
+    request: DreamCharacterRequest,
+    state: State<'_, AIOrchestrator>,
+    llm_state: State<'_, LlmService>,
+) -> Result<crate::ai::memory::MemoryDreamRunResult, KokoroError> {
+    let provider = llm_state.system_provider().await;
+    let target_language = state.response_language.lock().await.clone();
+    state
+        .memory_manager
+        .run_dream_now_with_provider(
+            &request.character_id,
+            "manual",
+            Some(provider),
+            Some(target_language),
+        )
+        .await
+        .map_err(|e| KokoroError::Database(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn get_dreaming_summary(
+    request: DreamCharacterRequest,
+    state: State<'_, AIOrchestrator>,
+) -> Result<crate::ai::memory::MemoryDreamingSummary, KokoroError> {
+    state
+        .memory_manager
+        .dreaming_summary(&request.character_id)
+        .await
+        .map_err(|e| KokoroError::Database(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn list_dream_jobs(
+    request: ListDreamJobsRequest,
+    state: State<'_, AIOrchestrator>,
+) -> Result<Vec<crate::ai::memory::MemoryDreamJobRecord>, KokoroError> {
+    state
+        .memory_manager
+        .list_dream_jobs(&request.character_id, request.limit)
+        .await
+        .map_err(|e| KokoroError::Database(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn list_dream_proposals(
+    request: ListDreamProposalsRequest,
+    state: State<'_, AIOrchestrator>,
+) -> Result<Vec<crate::ai::memory::MemoryDreamProposalRecord>, KokoroError> {
+    state
+        .memory_manager
+        .list_dream_proposals(
+            &request.character_id,
+            request.status.as_deref(),
+            request.limit,
+        )
+        .await
+        .map_err(|e| KokoroError::Database(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn approve_dream_proposal(
+    request: DreamProposalRequest,
+    state: State<'_, AIOrchestrator>,
+) -> Result<(), KokoroError> {
+    state
+        .memory_manager
+        .approve_dream_proposal(request.id)
+        .await
+        .map_err(|e| KokoroError::Database(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn reject_dream_proposal(
+    request: DreamProposalRequest,
+    state: State<'_, AIOrchestrator>,
+) -> Result<(), KokoroError> {
+    state
+        .memory_manager
+        .reject_dream_proposal(request.id)
         .await
         .map_err(|e| KokoroError::Database(e.to_string()))
 }

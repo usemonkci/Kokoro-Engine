@@ -28,12 +28,14 @@ pub fn load_json_config<T: DeserializeOwned + Default>(path: &Path, label: &str)
                 T::default()
             }
         },
-        Err(_) => {
-            tracing::info!(
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => T::default(),
+        Err(e) => {
+            tracing::warn!(
                 target: "config",
-                "[{}] No config file at {} — using defaults",
+                "[{}] Failed to read config {}: {} — using defaults",
                 label,
-                path.display()
+                path.display(),
+                e
             );
             T::default()
         }
@@ -78,6 +80,7 @@ pub fn resolve_api_key(api_key: &Option<String>, api_key_env: &Option<String>) -
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct MemoryUpgradeConfig {
     pub observability_enabled: bool,
     pub event_trigger_enabled: bool,
@@ -85,6 +88,10 @@ pub struct MemoryUpgradeConfig {
     pub structured_memory_enabled: bool,
     pub intent_routing_enabled: bool,
     pub retrieval_eval_enabled: bool,
+    pub dreaming_enabled: bool,
+    pub dream_auto_apply_level: String,
+    pub dream_daily_hour: u8,
+    pub dream_review_required_for_conflicts: bool,
 }
 
 impl Default for MemoryUpgradeConfig {
@@ -96,11 +103,20 @@ impl Default for MemoryUpgradeConfig {
             structured_memory_enabled: true,
             intent_routing_enabled: true,
             retrieval_eval_enabled: true,
+            dreaming_enabled: true,
+            dream_auto_apply_level: "aggressive".to_string(),
+            dream_daily_hour: 3,
+            dream_review_required_for_conflicts: true,
         }
     }
 }
 
 fn normalize_memory_upgrade_config(config: MemoryUpgradeConfig) -> MemoryUpgradeConfig {
+    let auto_apply_level = match config.dream_auto_apply_level.as_str() {
+        "conservative" | "review_only" | "aggressive" => config.dream_auto_apply_level,
+        _ => "aggressive".to_string(),
+    };
+
     MemoryUpgradeConfig {
         observability_enabled: true,
         event_trigger_enabled: true,
@@ -108,6 +124,10 @@ fn normalize_memory_upgrade_config(config: MemoryUpgradeConfig) -> MemoryUpgrade
         structured_memory_enabled: true,
         intent_routing_enabled: true,
         retrieval_eval_enabled: true,
+        dreaming_enabled: true,
+        dream_auto_apply_level: auto_apply_level,
+        dream_daily_hour: config.dream_daily_hour,
+        dream_review_required_for_conflicts: true,
     }
 }
 
@@ -117,6 +137,11 @@ pub fn validate_memory_upgrade_config(
     if config.event_cooldown_secs == 0 {
         return Err(KokoroError::Validation(
             "event_cooldown_secs must be greater than 0".to_string(),
+        ));
+    }
+    if config.dream_daily_hour > 23 {
+        return Err(KokoroError::Validation(
+            "dream_daily_hour must be between 0 and 23".to_string(),
         ));
     }
 
@@ -155,6 +180,10 @@ mod tests {
                 structured_memory_enabled: true,
                 intent_routing_enabled: true,
                 retrieval_eval_enabled: true,
+                dreaming_enabled: true,
+                dream_auto_apply_level: "aggressive".to_string(),
+                dream_daily_hour: 3,
+                dream_review_required_for_conflicts: true,
             }
         );
     }
@@ -183,6 +212,9 @@ mod tests {
             structured_memory_enabled: false,
             intent_routing_enabled: false,
             retrieval_eval_enabled: false,
+            dreaming_enabled: false,
+            dream_auto_apply_level: "review_only".to_string(),
+            dream_review_required_for_conflicts: false,
             ..MemoryUpgradeConfig::default()
         })
         .expect("config should be normalized");

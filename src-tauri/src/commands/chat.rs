@@ -1198,6 +1198,54 @@ pub(crate) struct ToolCall {
     args: HashMap<String, String>,
 }
 
+fn tool_call_fingerprint(tool_call: &ToolCall) -> String {
+    let mut args = tool_call.args.iter().collect::<Vec<_>>();
+    args.sort_by(|(left_key, left_value), (right_key, right_value)| {
+        left_key
+            .cmp(right_key)
+            .then_with(|| left_value.cmp(right_value))
+    });
+
+    let serialized_args = args
+        .into_iter()
+        .map(|(key, value)| format!("{}={}", key, value))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    format!("{}|{}", tool_call.name, serialized_args)
+}
+
+fn merge_round_tool_calls(
+    parsed_tool_calls: Vec<ToolCall>,
+    native_tool_calls: Vec<ToolCall>,
+) -> (Vec<ToolCall>, usize) {
+    if parsed_tool_calls.is_empty() {
+        return (native_tool_calls, 0);
+    }
+    if native_tool_calls.is_empty() {
+        return (parsed_tool_calls, 0);
+    }
+
+    let native_fingerprints = native_tool_calls
+        .iter()
+        .map(tool_call_fingerprint)
+        .collect::<HashSet<_>>();
+    let mut deduped_textual_tool_call_count = 0usize;
+    let mut merged = parsed_tool_calls
+        .into_iter()
+        .filter(|tool_call| {
+            let is_duplicate = native_fingerprints.contains(&tool_call_fingerprint(tool_call));
+            if is_duplicate {
+                deduped_textual_tool_call_count += 1;
+            }
+            !is_duplicate
+        })
+        .collect::<Vec<_>>();
+
+    merged.extend(native_tool_calls);
+    (merged, deduped_textual_tool_call_count)
+}
+
 impl From<ToolCall> for ToolInvocation {
     fn from(value: ToolCall) -> Self {
         Self {
@@ -1793,9 +1841,10 @@ pub async fn stream_chat(
             }
         }
 
-        let (cleaned_text, mut tool_calls) = parse_tool_call_tags(&round_response);
+        let (cleaned_text, parsed_tool_calls) = parse_tool_call_tags(&round_response);
         let (cleaned_text, round_translation) = extract_translate_tags(&cleaned_text);
-        tool_calls.extend(native_tool_calls);
+        let (tool_calls, deduped_textual_tool_call_count) =
+            merge_round_tool_calls(parsed_tool_calls, native_tool_calls);
 
         tracing::info!(
             target: "chat",
@@ -1823,6 +1872,14 @@ pub async fn stream_chat(
             round + 1,
             tool_calls.len()
         );
+        if deduped_textual_tool_call_count > 0 {
+            tracing::warn!(
+                target: "chat::tools",
+                "[Chat] Round {} dropped {} duplicate textual tool call(s) because matching native tool call(s) were present",
+                round + 1,
+                deduped_textual_tool_call_count
+            );
+        }
 
         // Collect translation from this round
         if let Some(t) = round_translation {
@@ -3854,5 +3911,73 @@ mod tests {
         let (cleaned, calls) = parse_tool_call_tags(input);
         assert_eq!(cleaned, "text[unknown_action:value]more");
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn test_merge_round_tool_calls_deduplicates_matching_textual_calls() {
+        let parsed_tool_calls = vec![
+            ToolCall {
+                tool_call_id: None,
+                name: "play_cue".to_string(),
+                args: HashMap::from([("cue".to_string(), "happy".to_string())]),
+            },
+            ToolCall {
+                tool_call_id: None,
+                name: "store_memory".to_string(),
+                args: HashMap::from([("fact".to_string(), "promise".to_string())]),
+            },
+        ];
+        let native_tool_calls = vec![
+            ToolCall {
+                tool_call_id: Some("call-1".to_string()),
+                name: "play_cue".to_string(),
+                args: HashMap::from([("cue".to_string(), "happy".to_string())]),
+            },
+            ToolCall {
+                tool_call_id: Some("call-2".to_string()),
+                name: "store_memory".to_string(),
+                args: HashMap::from([("fact".to_string(), "promise".to_string())]),
+            },
+        ];
+
+        let (merged, deduped_count) = merge_round_tool_calls(parsed_tool_calls, native_tool_calls);
+
+        assert_eq!(deduped_count, 2);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().all(|call| call.tool_call_id.is_some()));
+    }
+
+    #[test]
+    fn test_merge_round_tool_calls_keeps_non_matching_textual_calls() {
+        let parsed_tool_calls = vec![
+            ToolCall {
+                tool_call_id: None,
+                name: "play_cue".to_string(),
+                args: HashMap::from([("cue".to_string(), "happy".to_string())]),
+            },
+            ToolCall {
+                tool_call_id: None,
+                name: "store_memory".to_string(),
+                args: HashMap::from([("fact".to_string(), "promise".to_string())]),
+            },
+        ];
+        let native_tool_calls = vec![ToolCall {
+            tool_call_id: Some("call-1".to_string()),
+            name: "play_cue".to_string(),
+            args: HashMap::from([("cue".to_string(), "happy".to_string())]),
+        }];
+
+        let (merged, deduped_count) = merge_round_tool_calls(parsed_tool_calls, native_tool_calls);
+
+        assert_eq!(deduped_count, 1);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|call| {
+            call.tool_call_id.is_none()
+                && call.name == "store_memory"
+                && call.args.get("fact") == Some(&"promise".to_string())
+        }));
+        assert!(merged.iter().any(|call| {
+            call.tool_call_id.as_deref() == Some("call-1") && call.name == "play_cue"
+        }));
     }
 }

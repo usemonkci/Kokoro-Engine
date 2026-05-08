@@ -124,6 +124,14 @@ impl AIOrchestrator {
         sqlx::migrate!("./migrations").run(&pool).await?;
 
         let memory_manager = Arc::new(MemoryManager::new(pool.clone()));
+        let interrupted = memory_manager.mark_interrupted_dream_jobs().await?;
+        if interrupted > 0 {
+            tracing::warn!(
+                target: "memory",
+                "[Memory] Marked {} interrupted dream job(s) from a previous process",
+                interrupted
+            );
+        }
 
         Ok(Self {
             db: pool,

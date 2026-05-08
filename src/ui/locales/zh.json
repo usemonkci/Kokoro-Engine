@@ -521,10 +521,11 @@
                 "desc": "关闭后，角色不会读取、写入、提取或整理记忆；重新开启后只从开启后的新对话开始记录。",
                 "disabled_hint": "记忆系统已关闭。现有记忆仍可查看，但不会再注入到对话，也不会产生新的记忆、摘要或情绪快照。"
             },
-            "tabs": {
-                "list": "列表",
-                "timeline": "时间轴",
-                "graph": "图谱"
+        "tabs": {
+            "list": "列表",
+            "timeline": "时间轴",
+            "graph": "图谱",
+            "dream": "梦境"
             },
             "search": {
                 "placeholder": "搜索记忆..."
@@ -547,13 +548,107 @@
                 "hours_ago": "{{count}}小时前",
                 "days_ago": "{{count}}天前"
             },
-            "importance": {
-                "high": "高",
-                "med": "中",
-                "low": "低"
+        "importance": {
+            "high": "高",
+            "med": "中",
+            "low": "低"
+        },
+        "dream": {
+            "title": "梦境整理",
+            "summary": "待审 {{pending}} · 自动 {{auto}}",
+            "refresh": "刷新",
+            "run_now": "立即整理",
+            "running": "整理中",
+            "schedule": {
+                "title": "每日自动整理时间",
+                "hint": "应用保持后台运行时，每天 {{hour}}:00 后空闲 60 秒会自动运行做梦任务。",
+                "saving": "保存中",
+                "saved": "已保存"
             },
-            "upgrade": {
-                "title": "记忆活动",
+            "latest": {
+                "last": "最近：{{status}}",
+                "auto_applied": "自动处理：{{count}}",
+                "proposals": "待审提案：{{count}}"
+            },
+            "empty_proposals": "暂无待审梦境提案。",
+            "recent_jobs": "最近任务",
+            "sources": "来源：{{ids}}",
+            "proposed_content": "建议保留的记忆",
+            "source_memories": "参与比较的来源记忆",
+            "source_memory_id": "记忆 #{{id}}",
+            "source_missing": "来源记忆已不可用。",
+            "entity_key": "键：{{key}}",
+            "actions": {
+                "approve": "批准",
+                "reject": "拒绝"
+            },
+            "statuses": {
+                "active": "活跃",
+                "pending": "待审",
+                "ready": "完成",
+                "running": "运行中",
+                "interrupted": "已中断",
+                "failed": "失败",
+                "superseded": "已被取代",
+                "archived": "已归档",
+                "auto_applied": "已自动处理",
+                "approved": "已批准",
+                "rejected": "已拒绝"
+            },
+            "job_triggers": {
+                "manual": "手动",
+                "daily_idle": "每日自动整理"
+            },
+            "proposal_types": {
+                "conflict_review": "冲突复核",
+                "semantic_review": "相似复核",
+                "canonical_duplicate": "精确重复",
+                "entity_slot_merge": "槽位合并",
+                "llm_semantic_auto_merge": "LLM 自动合并",
+                "llm_conflict_review": "LLM 冲突复核",
+                "llm_semantic_review": "LLM 合并复核",
+                "llm_discovery_review": "LLM 梦境发现",
+                "llm_discovery_conflict_review": "LLM 梦境冲突",
+                "llm_discovery_update_review": "LLM 梦境更新",
+                "semantic_auto_merge": "语义自动合并"
+            },
+            "proposal_titles": {
+                "conflict_review": "复核可能冲突的记忆",
+                "semantic_review": "复核相似记忆",
+                "canonical_duplicate": "已合并完全重复的记忆",
+                "entity_slot_merge": "已合并重复槽位记忆",
+                "llm_semantic_auto_merge": "已合并 LLM 确认的记忆",
+                "llm_conflict_review": "复核 LLM 检测到的记忆冲突",
+                "llm_semantic_review": "复核 LLM 建议的记忆合并",
+                "llm_discovery_review": "复核 LLM 梦境发现的记忆关系",
+                "llm_discovery_conflict_review": "复核 LLM 梦境发现的记忆冲突",
+                "llm_discovery_update_review": "复核 LLM 梦境发现的记忆更新",
+                "semantic_auto_merge": "已合并高度相似的记忆"
+            },
+            "proposal_rationales": {
+                "conflict_review": "新记忆似乎与现有活跃记忆矛盾。",
+                "semantic_review": "这些记忆语义相似，但低于自动合并阈值。",
+                "canonical_duplicate": "Dream Light 发现了重复的规范化哈希。",
+                "entity_slot_merge": "Dream REM 发现同一个结构化槽位存在多条活跃记忆。",
+                "llm_semantic_auto_merge": "LLM 确认这些记忆可以安全合并。",
+                "llm_conflict_review": "LLM 检测到可能的矛盾。",
+                "llm_semantic_review": "LLM 建议复核这些相似记忆。",
+                "llm_discovery_review": "LLM 梦境发现了这些记忆之间不明显的关系。",
+                "llm_discovery_conflict_review": "LLM 梦境发现了这些记忆之间不明显的潜在冲突。",
+                "llm_discovery_update_review": "LLM 梦境发现了这些记忆之间不明显的潜在更新关系。",
+                "semantic_auto_merge": "Dream Deep 发现了一组高置信语义重复。"
+            },
+            "proposal_impacts": {
+                "conflict_review": "在使旧记忆失效或替换旧记忆前需要人工复核。",
+                "semantic_review": "在让任一记忆被取代前需要人工复核。",
+                "auto_merged": "已自动合并重复的活跃记忆；来源行已标记为被取代。",
+                "llm_conflict_review": "修改任一活跃记忆前需要人工复核。",
+                "llm_semantic_review": "由于置信度低于自动处理阈值，需要人工复核。",
+                "llm_discovery_review": "这组关系由 LLM 梦境发现，而不是确定性相似度发现，因此需要人工复核。"
+            }
+        },
+        "upgrade": {
+            "title": "记忆活动",
                 "loading": "正在加载记忆遥测...",
                 "write_events": "写入事件",
                 "retrieval_logs": "检索日志",
