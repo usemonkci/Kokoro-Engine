@@ -21,6 +21,7 @@ pub struct ImageGenProviderConfig {
     pub size: Option<String>,            // e.g. "1024x1024"
     pub quality: Option<String>,         // e.g. "standard", "hd"
     pub style: Option<String>,           // e.g. "vivid", "natural"
+    pub prompt_prefix: Option<String>,   // SD: positive prompt prefix
     pub negative_prompt: Option<String>, // SD: negative prompt
 
     /// Catch-all for provider-specific config
@@ -68,6 +69,7 @@ impl Default for ImageGenSystemConfig {
                     size: Some("1024x1024".to_string()),
                     quality: Some("standard".to_string()),
                     style: Some("vivid".to_string()),
+                    prompt_prefix: None,
                     negative_prompt: None,
                     extra: HashMap::new(),
                 },
@@ -83,6 +85,7 @@ impl Default for ImageGenSystemConfig {
                     size: Some("512x512".to_string()), // SD v1.5 default
                     quality: None,
                     style: None,
+                    prompt_prefix: None,
                     negative_prompt: None,
                     extra: HashMap::new(),
                 },

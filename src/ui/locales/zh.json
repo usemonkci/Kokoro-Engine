@@ -456,6 +456,8 @@
                 "size": "图片尺寸",
                 "size_auto": "自动 (跟随窗口)",
                 "size_custom": "自定义...",
+                "prompt_prefix": "正向提示词前缀",
+                "prompt_prefix_placeholder": "例如：masterpiece, best quality, detailed",
                 "negative_prompt": "负面提示词",
                 "negative_prompt_placeholder": "例如：模糊、低质量、水印、nsfw"
             },

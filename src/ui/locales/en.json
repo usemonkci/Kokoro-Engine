@@ -456,6 +456,8 @@
                 "size": "Image Size",
                 "size_auto": "Auto (window size)",
                 "size_custom": "Custom...",
+                "prompt_prefix": "Positive Prompt Prefix",
+                "prompt_prefix_placeholder": "e.g. masterpiece, best quality, detailed",
                 "negative_prompt": "Negative Prompt",
                 "negative_prompt_placeholder": "e.g. blurry, low quality, watermark, nsfw"
             },

@@ -456,6 +456,8 @@
                 "size": "画像サイズ",
                 "size_auto": "自動 (ウィンドウ)",
                 "size_custom": "カスタム...",
+                "prompt_prefix": "ポジティブプロンプト接頭辞",
+                "prompt_prefix_placeholder": "例：masterpiece, best quality, detailed",
                 "negative_prompt": "ネガティブプロンプト",
                 "negative_prompt_placeholder": "例：ぼやけ、低品質、透かし、nsfw"
             },

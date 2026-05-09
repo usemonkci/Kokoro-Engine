@@ -205,11 +205,21 @@ impl ImageGenService {
         if gen_params.prompt.is_empty() {
             gen_params.prompt = prompt.clone();
         }
-        if gen_params.negative_prompt.is_none() {
+        {
             let configs = self.provider_configs.read().await;
             if let Some(cfg) = configs.get(&target_id) {
-                gen_params.negative_prompt = cfg.negative_prompt.clone();
+                if gen_params.prompt_prefix.is_none() {
+                    gen_params.prompt_prefix = cfg.prompt_prefix.clone();
+                }
+                if gen_params.negative_prompt.is_none() {
+                    gen_params.negative_prompt = cfg.negative_prompt.clone();
+                }
             }
+        }
+
+        if provider.provider_type() == "stable_diffusion" {
+            gen_params.prompt =
+                apply_prompt_prefix(gen_params.prompt_prefix.as_deref(), &gen_params.prompt);
         }
 
         if gen_params.size.as_deref() == Some("auto") {
@@ -220,7 +230,8 @@ impl ImageGenService {
             }
         }
 
-        let prompt_chars = prompt.chars().count();
+        let effective_prompt = gen_params.prompt.clone();
+        let prompt_chars = effective_prompt.chars().count();
         tracing::info!(
             target: "imagegen",
             "Generating with provider '{}' (prompt_chars={})",
@@ -255,7 +266,7 @@ impl ImageGenService {
 
         Ok(ImageGenResult {
             image_url: abs_path,
-            prompt,
+            prompt: effective_prompt,
             provider_id: target_id,
         })
     }
@@ -332,5 +343,22 @@ impl ImageGenService {
 
         tracing::info!(target: "imagegen", "Reloaded {} providers", providers.len());
         Ok(())
+    }
+}
+
+fn apply_prompt_prefix(prefix: Option<&str>, prompt: &str) -> String {
+    let Some(prefix) = prefix.map(str::trim).filter(|value| !value.is_empty()) else {
+        return prompt.to_string();
+    };
+
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return prefix.to_string();
+    }
+
+    if prefix.ends_with(',') {
+        format!("{} {}", prefix, prompt)
+    } else {
+        format!("{}, {}", prefix, prompt)
     }
 }

@@ -327,7 +327,20 @@ export default function ImageGenSettings({ config, onChange }: ImageGenSettingsP
                                             )}
                                         </div>
 
-                                        {/* Negative Prompt (SD only) */}
+                                        {/* Prompt tuning (SD only) */}
+                                        {provider.provider_type === "stable_diffusion" && (
+                                            <div>
+                                                <label className={labelClasses}>{t("settings.image_gen.fields.prompt_prefix")}</label>
+                                                <input
+                                                    type="text"
+                                                    value={provider.prompt_prefix || ""}
+                                                    onChange={e => updateProvider(index, { prompt_prefix: e.target.value })}
+                                                    placeholder={t("settings.image_gen.fields.prompt_prefix_placeholder")}
+                                                    className={clsx(inputClasses, "text-xs")}
+                                                />
+                                            </div>
+                                        )}
+
                                         {provider.provider_type === "stable_diffusion" && (
                                             <div>
                                                 <label className={labelClasses}>{t("settings.image_gen.fields.negative_prompt")}</label>

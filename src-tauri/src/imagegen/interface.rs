@@ -38,6 +38,7 @@ impl From<ImageGenError> for String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageGenParams {
     pub prompt: String,
+    pub prompt_prefix: Option<String>,
     pub negative_prompt: Option<String>,
     pub size: Option<String>,    // e.g. "1024x1024"
     pub quality: Option<String>, // e.g. "standard", "hd"
@@ -49,6 +50,7 @@ impl Default for ImageGenParams {
     fn default() -> Self {
         Self {
             prompt: "".to_string(),
+            prompt_prefix: None,
             negative_prompt: None,
             size: None,
             quality: None,

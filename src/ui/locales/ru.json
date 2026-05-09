@@ -456,6 +456,8 @@
         "size": "Размер изображения",
         "size_auto": "Авто (размер окна)",
         "size_custom": "Пользовательский...",
+        "prompt_prefix": "Префикс позитивного промпта",
+        "prompt_prefix_placeholder": "например, masterpiece, best quality, detailed",
         "negative_prompt": "Негативный промпт",
         "negative_prompt_placeholder": "например, blurry, low quality, watermark, nsfw"
       },
