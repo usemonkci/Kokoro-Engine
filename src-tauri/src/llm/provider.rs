@@ -483,7 +483,6 @@ fn format_openai_error(error: OpenAIError) -> String {
 }
 
 pub struct OpenAIProvider {
-    client: Client<OpenAIConfig>,
     http_client: HttpClient,
     api_key: String,
     base_url: String,
@@ -495,7 +494,6 @@ impl OpenAIProvider {
     pub fn new(api_key: String, base_url: Option<String>, model: Option<String>) -> Self {
         let base_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         Self {
-            client: build_openai_client(api_key.clone(), Some(base_url.clone())),
             http_client: HttpClient::new(),
             api_key,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -669,7 +667,11 @@ impl LlmProvider for OpenAIProvider {
         messages: Vec<ChatCompletionRequestMessage>,
         options: Option<LlmParams>,
     ) -> Result<String, String> {
-        create_chat(&self.client, &self.model, messages, options).await
+        self.create_chat_rich_inner(
+            messages.into_iter().map(LlmChatMessage::from).collect(),
+            options,
+        )
+        .await
     }
 
     async fn chat_stream(
@@ -677,7 +679,21 @@ impl LlmProvider for OpenAIProvider {
         messages: Vec<ChatCompletionRequestMessage>,
         options: Option<LlmParams>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, String>> + Send>>, String> {
-        create_chat_stream(&self.client, &self.model, messages, options).await
+        let stream = self
+            .create_chat_stream_rich_inner(
+                messages.into_iter().map(LlmChatMessage::from).collect(),
+                options,
+                None,
+            )
+            .await?;
+
+        Ok(Box::pin(stream.filter_map(|event| async move {
+            match event {
+                Ok(LlmStreamEvent::Text(text)) => Some(Ok(text)),
+                Ok(LlmStreamEvent::ReasoningContent(_)) | Ok(LlmStreamEvent::ToolCall(_)) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })))
     }
 
     async fn chat_stream_with_tools(
@@ -686,7 +702,12 @@ impl LlmProvider for OpenAIProvider {
         options: Option<LlmParams>,
         tools: Vec<LlmToolDefinition>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<LlmStreamEvent, String>> + Send>>, String> {
-        create_chat_stream_with_tools(&self.client, &self.model, messages, options, tools).await
+        self.create_chat_stream_rich_inner(
+            messages.into_iter().map(LlmChatMessage::from).collect(),
+            options,
+            Some(tools),
+        )
+        .await
     }
 
     fn supports_native_tools(&self) -> bool {

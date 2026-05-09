@@ -4,6 +4,10 @@ use tracing::field::{Field, Visit};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::EnvFilter;
+
+const DEFAULT_LOG_FILTER: &str = "info";
+const ASYNC_OPENAI_CLIENT_FILTER: &str = "async_openai::client=error";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModulePalette {
@@ -155,8 +159,16 @@ where
 
 pub fn init_logging() {
     let with_color = color_enabled();
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER))
+        .add_directive(
+            ASYNC_OPENAI_CLIENT_FILTER
+                .parse()
+                .expect("async-openai log filter directive must be valid"),
+        );
 
     let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(filter)
         .with_ansi(false)
         .with_target(false)
         .with_level(false)
