@@ -5,6 +5,7 @@ use anyhow::Result;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 #[cfg(not(test))]
 use tokio::sync::Mutex;
@@ -1374,6 +1375,25 @@ fn build_search_outcome(snippets: Vec<MemorySnippet>) -> SearchMemoriesOutcome {
     SearchMemoriesOutcome::new(snippets)
 }
 
+fn compare_scored_memory(
+    left_score: f32,
+    left: &MemorySnippet,
+    right_score: f32,
+    right: &MemorySnippet,
+) -> Ordering {
+    right_score
+        .partial_cmp(&left_score)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| {
+            right
+                .importance
+                .partial_cmp(&left.importance)
+                .unwrap_or(Ordering::Equal)
+        })
+        .then_with(|| right.created_at.cmp(&left.created_at))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
 fn build_search_stats(
     semantic_results: &[MemorySnippet],
     bm25_results: &[(i64, f64)],
@@ -2524,7 +2544,7 @@ impl MemoryManager {
         }
 
         let mut fused: Vec<(f32, MemorySnippet)> = rrf_scores.into_values().collect();
-        fused.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        fused.sort_by(|a, b| compare_scored_memory(a.0, &a.1, b.0, &b.1));
 
         let snippets: Vec<MemorySnippet> = fused
             .iter()
@@ -2713,7 +2733,7 @@ impl MemoryManager {
             scored_memories.push((memory, final_score));
         }
 
-        scored_memories.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_memories.sort_by(|a, b| compare_scored_memory(a.1, &a.0, b.1, &b.0));
 
         Ok(scored_memories
             .into_iter()
@@ -4756,6 +4776,36 @@ fn build_merge_facts_prompt(facts: &[&str], target_language: Option<&str>) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn memory_snippet_for_sort(id: i64, importance: f64, created_at: i64) -> MemorySnippet {
+        MemorySnippet {
+            id,
+            content: format!("memory {id}"),
+            embedding: Vec::new(),
+            created_at,
+            importance,
+            tier: "ephemeral".to_string(),
+        }
+    }
+
+    #[test]
+    fn compare_scored_memory_uses_stable_tie_breaks() {
+        let mut items = vec![
+            (0.50, memory_snippet_for_sort(3, 0.4, 100)),
+            (0.70, memory_snippet_for_sort(5, 0.1, 10)),
+            (0.50, memory_snippet_for_sort(4, 0.8, 90)),
+            (0.50, memory_snippet_for_sort(2, 0.8, 120)),
+            (0.50, memory_snippet_for_sort(1, 0.8, 120)),
+        ];
+
+        items.sort_by(|left, right| compare_scored_memory(left.0, &left.1, right.0, &right.1));
+
+        let ids = items
+            .into_iter()
+            .map(|(_, memory)| memory.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![5, 1, 2, 4, 3]);
+    }
 
     #[test]
     fn retrieval_eval_summary_is_hidden_when_flag_disabled() {

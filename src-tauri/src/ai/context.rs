@@ -706,10 +706,10 @@ impl AIOrchestrator {
 
         let mut final_messages = Vec::new();
 
-        // ── Main System Message ──────────────────────────────────────────────
-        // Structure: <rules> (highest attention) → <character> → <memory> → <tools> → <live2d> → <language>
-        // Placing core_persona rules at the TOP exploits primacy attention effect.
+        // ── Stable System Message ────────────────────────────────────────────
+        // Keep reusable instructions before per-turn context to improve prefix cache reuse.
         let mut system_parts: Vec<String> = Vec::new();
+        let mut dynamic_context_parts: Vec<String> = Vec::new();
 
         // Section 1: Core persona rules (MUST be first for primacy effect)
         system_parts.push(format!(
@@ -746,7 +746,7 @@ impl AIOrchestrator {
                     .map(|m| format!("- {}", m.content))
                     .collect::<Vec<_>>()
                     .join("\n");
-                system_parts.push(format!(
+                dynamic_context_parts.push(format!(
                     concat!(
                         "<long_term_memory>\n",
                         "You remember these important facts and events about the user and your shared history:\n{}\n\n",
@@ -771,7 +771,7 @@ impl AIOrchestrator {
                 if normalized_pinned != "{}" {
                     state_lines.push(format!("Pinned conversation state: {}", normalized_pinned));
                 }
-                system_parts.push(format!(
+                dynamic_context_parts.push(format!(
                     "<conversation_state>\n{}\n</conversation_state>",
                     state_lines.join("\n")
                 ));
@@ -781,7 +781,7 @@ impl AIOrchestrator {
         // Section 5: Conversation summary (lower priority than long-term memory and recent raw messages)
         if let Some(summary_record) = conversation_summary {
             if !summary_record.summary.trim().is_empty() {
-                system_parts.push(format!(
+                dynamic_context_parts.push(format!(
                     concat!(
                         "<conversation_summary>\n",
                         "This is a compressed summary of earlier messages in the current conversation:\n{}\n\n",
@@ -800,7 +800,7 @@ impl AIOrchestrator {
                         .map(|(i, s)| format!("{}. {}", i + 1, s))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    system_parts.push(format!(
+                    dynamic_context_parts.push(format!(
                         "<conversation_summary>\nFallback summaries from recent sessions (most recent first):\n{}\n</conversation_summary>",
                         summary_block
                     ));
@@ -855,12 +855,19 @@ impl AIOrchestrator {
             ));
         }
 
-        // Push the single consolidated system message
         final_messages.push(Message {
             role: "system".to_string(),
             content: system_parts.join("\n\n"),
             metadata: None,
         });
+
+        if !dynamic_context_parts.is_empty() {
+            final_messages.push(Message {
+                role: "system".to_string(),
+                content: dynamic_context_parts.join("\n\n"),
+                metadata: Some(serde_json::json!({"type": "dynamic_context"})),
+            });
+        }
 
         // -- Translation Instruction (kept separate at end for instruction clarity) --
         {
@@ -998,6 +1005,112 @@ mod tests {
 
         assert!(prompt.contains("Write the summary in 中文"));
         assert!(prompt.contains("translate or summarize it into 中文"));
+    }
+
+    #[tokio::test]
+    async fn compose_prompt_places_dynamic_context_after_stable_system() {
+        let orchestrator = setup_test_orchestrator().await;
+        orchestrator.set_memory_enabled(false).await;
+        orchestrator
+            .set_system_prompt("Character persona".to_string())
+            .await;
+        orchestrator.set_response_language("中文".to_string()).await;
+        orchestrator
+            .push_history_message(Message {
+                role: "user".to_string(),
+                content: "Earlier history".to_string(),
+                metadata: None,
+            })
+            .await;
+
+        let conversation_id = "conv-cache-order";
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO conversations \
+             (id, character_id, title, topic, pinned_state, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(conversation_id)
+        .bind("char-cache")
+        .bind("Cache order")
+        .bind("KV cache tuning")
+        .bind("{}")
+        .bind(&now)
+        .bind(&now)
+        .execute(&orchestrator.db)
+        .await
+        .expect("conversation insert should succeed");
+        *orchestrator.current_conversation_id.lock().await = Some(conversation_id.to_string());
+
+        let (messages, warnings) = orchestrator
+            .compose_prompt(
+                "hello",
+                false,
+                Some("Tool prompt".to_string()),
+                false,
+                "char-cache",
+            )
+            .await
+            .expect("compose_prompt should succeed");
+
+        assert!(warnings.is_empty());
+        let stable = &messages[0];
+        assert_eq!(stable.role, "system");
+        assert!(stable.content.contains("<rules>"));
+        assert!(stable.content.contains("<character>"));
+        assert!(stable.content.contains("<tools>"));
+        assert!(stable.content.contains("<language>"));
+        assert!(!stable.content.contains("<conversation_state>"));
+        assert!(!stable.content.contains("<long_term_memory>"));
+        assert!(!stable.content.contains("<conversation_summary>"));
+
+        let dynamic = &messages[1];
+        assert_eq!(dynamic.role, "system");
+        assert_eq!(
+            dynamic
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("type"))
+                .and_then(|value| value.as_str()),
+            Some("dynamic_context")
+        );
+        assert!(dynamic.content.contains("<conversation_state>"));
+        assert!(dynamic.content.contains("KV cache tuning"));
+
+        let history_index = messages
+            .iter()
+            .position(|message| message.content == "Earlier history")
+            .expect("history message should be included");
+        assert!(
+            history_index > 1,
+            "dynamic context should appear before recent history"
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_prompt_skips_dynamic_context_message_when_empty() {
+        let orchestrator = setup_test_orchestrator().await;
+        orchestrator.set_memory_enabled(false).await;
+
+        let (messages, warnings) = orchestrator
+            .compose_prompt("hello", false, None, true, "char-cache")
+            .await
+            .expect("compose_prompt should succeed");
+
+        assert!(warnings.is_empty());
+        assert!(messages.iter().all(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("type"))
+                .and_then(|value| value.as_str())
+                != Some("dynamic_context")
+        }));
+        assert!(messages
+            .iter()
+            .all(|message| !message.content.contains("<long_term_memory>")
+                && !message.content.contains("<conversation_state>")
+                && !message.content.contains("<conversation_summary>")));
     }
 
     #[tokio::test]
