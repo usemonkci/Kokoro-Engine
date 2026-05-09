@@ -205,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_memory_upgrade_config_forces_flags_enabled() {
+    fn validate_memory_upgrade_config_forces_flags_enabled_and_preserves_valid_dream_level() {
         let config = validate_memory_upgrade_config(MemoryUpgradeConfig {
             observability_enabled: false,
             event_trigger_enabled: false,
@@ -219,7 +219,13 @@ mod tests {
         })
         .expect("config should be normalized");
 
-        assert_eq!(config, MemoryUpgradeConfig::default());
+        assert_eq!(
+            config,
+            MemoryUpgradeConfig {
+                dream_auto_apply_level: "review_only".to_string(),
+                ..MemoryUpgradeConfig::default()
+            }
+        );
     }
 
     #[test]
