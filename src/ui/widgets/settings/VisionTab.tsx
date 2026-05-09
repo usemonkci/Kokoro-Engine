@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import {
     getVisionConfig, saveVisionConfig, captureScreenNow,
     listOllamaModels,
+    listAnthropicModels,
     getLlamaCppStatus,
 } from "../../../lib/kokoro-bridge";
 import type { VisionConfig, OllamaModelInfo } from "../../../lib/kokoro-bridge";
@@ -24,6 +25,8 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
     const [ollamaReachable, setOllamaReachable] = useState(true);
     const [llamaCppModels, setLlamaCppModels] = useState<string[]>([]);
     const [llamaCppReachable, setLlamaCppReachable] = useState(true);
+    const [anthropicModels, setAnthropicModels] = useState<string[]>([]);
+    const [anthropicReachable, setAnthropicReachable] = useState(true);
     const [dirty, setDirty] = useState(false);
     const [editingInterval, setEditingInterval] = useState(false);
     const [intervalInput, setIntervalInput] = useState("");
@@ -115,8 +118,10 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
         if (provider === "llm" || provider === "openai" || !baseUrl) {
             setOllamaModels([]);
             setLlamaCppModels([]);
+            setAnthropicModels([]);
             setOllamaReachable(true);
             setLlamaCppReachable(true);
+            setAnthropicReachable(true);
             return;
         }
 
@@ -137,6 +142,8 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                     if (!cancelled) {
                         setLlamaCppModels([]);
                         setLlamaCppReachable(true);
+                        setAnthropicModels([]);
+                        setAnthropicReachable(true);
                     }
                     return;
                 }
@@ -159,6 +166,39 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                     if (!cancelled) {
                         setOllamaModels([]);
                         setOllamaReachable(true);
+                        setAnthropicModels([]);
+                        setAnthropicReachable(true);
+                    }
+                    return;
+                }
+
+                if (provider === "anthropic") {
+                    const apiKey = config.vlm_api_key || "";
+                    if (!apiKey) {
+                        setAnthropicModels([]);
+                        setAnthropicReachable(true);
+                        setOllamaModels([]);
+                        setLlamaCppModels([]);
+                        setOllamaReachable(true);
+                        setLlamaCppReachable(true);
+                        return;
+                    }
+
+                    try {
+                        const models = await listAnthropicModels(baseUrl, apiKey);
+                        if (cancelled) return;
+                        setAnthropicModels(models);
+                        setAnthropicReachable(true);
+                    } catch {
+                        if (cancelled) return;
+                        setAnthropicModels([]);
+                        setAnthropicReachable(false);
+                    }
+                    if (!cancelled) {
+                        setOllamaModels([]);
+                        setLlamaCppModels([]);
+                        setOllamaReachable(true);
+                        setLlamaCppReachable(true);
                     }
                 }
             };
@@ -172,7 +212,7 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
             cancelled = true;
             window.clearTimeout(timer);
         };
-    }, [config?.vlm_provider, config?.vlm_base_url]);
+    }, [config?.vlm_provider, config?.vlm_base_url, config?.vlm_api_key]);
 
     const loadConfig = async () => {
         try {
@@ -224,16 +264,22 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
     // ── Model detection ──
     const isOllamaProvider = config?.vlm_provider === "ollama";
     const isLlamaCppProvider = config?.vlm_provider === "llama_cpp";
+    const isAnthropicProvider = config?.vlm_provider === "anthropic";
     const isLlmProvider = config?.vlm_provider === "llm";
+    const isOnlineProvider = config?.vlm_provider === "openai" || isAnthropicProvider;
     const detectedModels = isOllamaProvider
         ? ollamaModels.map((model) => model.name)
         : isLlamaCppProvider
             ? llamaCppModels
+            : isAnthropicProvider
+                ? anthropicModels
             : [];
     const providerReachable = isOllamaProvider
         ? ollamaReachable
         : isLlamaCppProvider
             ? llamaCppReachable
+            : isAnthropicProvider
+                ? anthropicReachable
             : true;
     const hasMatchingDetectedModel = detectedModels.some((model) => {
         const configModel = (config?.vlm_model || "").split(":")[0].toLowerCase();
@@ -318,6 +364,8 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                                 vlm_provider: prov,
                                 vlm_base_url: prov === "ollama"
                                     ? "http://localhost:11434/v1"
+                                    : prov === "anthropic"
+                                        ? "https://api.anthropic.com/v1"
                                     : prov === "llama_cpp"
                                         ? "http://127.0.0.1:8080"
                                         : prov === "llm"
@@ -325,16 +373,19 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                                             : "https://api.openai.com/v1",
                                 vlm_model: prov === "ollama" || prov === "llama_cpp"
                                     ? "minicpm-v"
+                                    : prov === "anthropic"
+                                        ? "claude-sonnet-4-20250514"
                                     : prov === "llm"
                                         ? ""
                                         : "gpt-4o",
-                                vlm_api_key: prov === "openai" ? config.vlm_api_key : null,
+                                vlm_api_key: prov === "openai" || prov === "anthropic" ? config.vlm_api_key : null,
                             });
                         }}
                         options={[
                             { value: "ollama", label: t("settings.vision.provider.ollama") },
                             { value: "llama_cpp", label: t("settings.vision.provider.llama_cpp") },
                             { value: "openai", label: t("settings.vision.provider.openai") },
+                            { value: "anthropic", label: t("settings.vision.provider.anthropic") },
                             { value: "llm", label: t("settings.vision.provider.llm") },
                         ]}
                     />
@@ -342,7 +393,7 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
 
                 {/* Local provider not reachable warning */}
                 <AnimatePresence>
-                    {(isOllamaProvider || isLlamaCppProvider) && !providerReachable && (
+                    {(isOllamaProvider || isLlamaCppProvider || isAnthropicProvider) && !providerReachable && (
                         <motion.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: "auto" }}
@@ -354,8 +405,10 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                                 <p className="text-xs text-[var(--color-warning)] leading-relaxed">
                                     {isOllamaProvider
                                         ? t("settings.vision.ollama.warning")
-                                        : t("settings.vision.llama_cpp.warning")}{" "}
-                                    <span className="font-mono">{config.vlm_base_url || "http://127.0.0.1:8080"}</span>
+                                        : isLlamaCppProvider
+                                            ? t("settings.vision.llama_cpp.warning")
+                                            : t("settings.vision.anthropic.warning")}{" "}
+                                    <span className="font-mono">{config.vlm_base_url || (isAnthropicProvider ? "https://api.anthropic.com/v1" : "http://127.0.0.1:8080")}</span>
                                 </p>
                             </div>
                         </motion.div>
@@ -384,6 +437,8 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                             onChange={(e) => update({ vlm_base_url: e.target.value || null })}
                             placeholder={config.vlm_provider === "ollama"
                                 ? "http://localhost:11434/v1"
+                                : config.vlm_provider === "anthropic"
+                                    ? "https://api.anthropic.com/v1"
                                 : config.vlm_provider === "llama_cpp"
                                     ? "http://127.0.0.1:8080"
                                     : "https://api.openai.com/v1"}
@@ -425,7 +480,11 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                             type="text"
                             value={config.vlm_model}
                             onChange={(e) => update({ vlm_model: e.target.value })}
-                            placeholder={config.vlm_provider === "ollama" || config.vlm_provider === "llama_cpp" ? "minicpm-v" : "gpt-4o"}
+                            placeholder={config.vlm_provider === "ollama" || config.vlm_provider === "llama_cpp"
+                                ? "minicpm-v"
+                                : config.vlm_provider === "anthropic"
+                                    ? "claude-sonnet-4-20250514"
+                                    : "gpt-4o"}
                             className={clsx(
                                 "w-full px-3 py-2 rounded-lg text-sm",
                                 "bg-[var(--color-bg-surface)] border border-[var(--color-border)]",
@@ -439,7 +498,9 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                             ? t("settings.vision.model.recommend.ollama")
                             : config.vlm_provider === "llama_cpp"
                                 ? t("settings.vision.model.recommend.llama_cpp")
-                            : t("settings.vision.model.recommend.openai")}
+                                : config.vlm_provider === "anthropic"
+                                    ? t("settings.vision.model.recommend.anthropic")
+                                    : t("settings.vision.model.recommend.openai")}
                     </p>
                 </div>
                 )}
@@ -469,7 +530,7 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                 </AnimatePresence>
 
                 {/* API Key (only for online providers) */}
-                {config.vlm_provider === "openai" && !isLlmProvider && (
+                {isOnlineProvider && !isLlmProvider && (
                     <div className="space-y-2">
                         <div className="flex items-center gap-2">
                             <KeyRound size={14} strokeWidth={1.5} className="text-[var(--color-text-muted)]" />
@@ -479,7 +540,7 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                             type="password"
                             value={config.vlm_api_key || ""}
                             onChange={(e) => update({ vlm_api_key: e.target.value || null })}
-                            placeholder="sk-..."
+                            placeholder={isAnthropicProvider ? "sk-ant-..." : "sk-..."}
                             className={clsx(
                                 "w-full px-3 py-2 rounded-lg text-sm",
                                 "bg-[var(--color-bg-surface)] border border-[var(--color-border)]",

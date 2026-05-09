@@ -6,6 +6,7 @@ use std::path::Path;
 fn default_vlm_base_url(provider: &str) -> Option<String> {
     match provider {
         "llm" => None,
+        "anthropic" => Some("https://api.anthropic.com/v1".to_string()),
         "llama_cpp" => Some("http://127.0.0.1:8080".to_string()),
         "openai" => Some("https://api.openai.com/v1".to_string()),
         _ => Some("http://localhost:11434/v1".to_string()),
@@ -15,6 +16,7 @@ fn default_vlm_base_url(provider: &str) -> Option<String> {
 fn default_vlm_model(provider: &str) -> String {
     match provider {
         "ollama" | "llama_cpp" => "minicpm-v".to_string(),
+        "anthropic" => "claude-sonnet-4-20250514".to_string(),
         "openai" => "gpt-4o".to_string(),
         _ => String::new(),
     }
@@ -33,7 +35,7 @@ pub struct VisionConfig {
     pub proactive_enabled: bool,
 
     // ── Independent VLM Provider ──────────────────────────
-    /// Provider type: "ollama", "openai", "llama_cpp", or "llm" (use active LLM)
+    /// Provider type: "ollama", "openai", "anthropic", "llama_cpp", or "llm" (use active LLM)
     pub vlm_provider: String,
     /// Base URL for the VLM API (e.g. "http://localhost:11434/v1")
     pub vlm_base_url: Option<String>,
@@ -129,5 +131,36 @@ mod tests {
             Some("http://127.0.0.1:8080")
         );
         assert_eq!(config.vlm_model, "minicpm-v");
+    }
+
+    #[test]
+    fn load_config_heals_anthropic_defaults() {
+        let temp = tempdir().expect("temp dir should be created");
+        let path = temp.path().join("vision_config.json");
+
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "enabled": false,
+                "interval_secs": 15,
+                "change_threshold": 0.05,
+                "vlm_provider": "anthropic",
+                "vlm_base_url": null,
+                "vlm_model": "",
+                "vlm_api_key": null,
+                "camera_enabled": false,
+                "camera_device_id": null
+            })
+            .to_string(),
+        )
+        .expect("test config should be written");
+
+        let config = load_config(&path);
+
+        assert_eq!(
+            config.vlm_base_url.as_deref(),
+            Some("https://api.anthropic.com/v1")
+        );
+        assert_eq!(config.vlm_model, "claude-sonnet-4-20250514");
     }
 }

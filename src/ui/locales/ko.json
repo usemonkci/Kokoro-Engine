@@ -680,6 +680,7 @@
                 "ollama": "Ollama (로컬 — 권장)",
                 "llama_cpp": "llama.cpp (로컬 VLM)",
                 "openai": "OpenAI",
+                "anthropic": "Anthropic 호환",
                 "llm": "현재 LLM 사용 (멀티모달)",
                 "llm_note": "「API」탭에서 설정한 LLM 공급자에 직접 스크린샷을 전송합니다. 별도의 VLM 설정이 필요 없습니다. 사용 중인 모델이 이미지 입력을 지원하는지 확인하세요 (예: GPT-4o, Claude 3, Gemini 등)."
             },
@@ -689,13 +690,17 @@
             "llama_cpp": {
                 "warning": "llama.cpp에 연결할 수 없습니다. OpenAI 호환 llama.cpp 서버가 다음 주소에서 실행 중인지 확인하세요:"
             },
+            "anthropic": {
+                "warning": "Anthropic 호환 VLM 공급자에 연결할 수 없습니다. 기본 URL, API 키, 모델 접근 권한을 확인하세요:"
+            },
             "base_url": "기본 URL",
             "model": {
                 "label": "모델",
                 "recommend": {
                     "ollama": "권장: minicpm-v, moondream2, llava",
                     "llama_cpp": "권장: minicpm-v, Qwen2.5-VL, LLaVA",
-                    "openai": "권장: gpt-4o (비전 지원)"
+                    "openai": "권장: gpt-4o (비전 지원)",
+                    "anthropic": "권장: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022"
                 },
                 "not_installed_prefix": "(설치되지 않음)",
                 "install_warning": "모델 \"{{model}}\"이(가) 설치되지 않았습니다",

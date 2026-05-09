@@ -1,7 +1,8 @@
 //! Vision Watcher — background loop that captures screen and analyzes with VLM.
 
+use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::messages::user_message_with_images;
-use crate::llm::provider::LlmParams;
+use crate::llm::provider::{LlmParams, LlmProvider};
 use crate::llm::service::LlmService;
 use crate::vision::capture::{capture_screen, has_significant_change};
 use crate::vision::config::VisionConfig;
@@ -171,6 +172,7 @@ impl VisionWatcher {
 const VISION_PROMPT: &str = "Describe the screenshot in 2-3 concise, information-rich sentences. Include the active application/window, important visible UI text, and the most visually prominent non-UI content such as characters, artwork, background, objects, colors, and scene details. If a fictional/anime character is clearly recognizable, you may name them; do not identify real people from appearance alone. Do not infer authorship, private intent, emotions, or anything off-screen. If something is unclear, say that briefly.";
 const DEFAULT_OLLAMA_VLM_BASE_URL: &str = "http://localhost:11434/v1";
 const DEFAULT_OPENAI_VLM_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_ANTHROPIC_VLM_BASE_URL: &str = "https://api.anthropic.com/v1";
 const DEFAULT_LLAMA_CPP_VLM_BASE_URL: &str = "http://127.0.0.1:8080";
 
 fn build_proactive_vision_instruction(description: &str) -> String {
@@ -185,6 +187,7 @@ fn build_proactive_vision_instruction(description: &str) -> String {
 fn default_vlm_base_url(provider: &str) -> &'static str {
     match provider {
         "llama_cpp" => DEFAULT_LLAMA_CPP_VLM_BASE_URL,
+        "anthropic" => DEFAULT_ANTHROPIC_VLM_BASE_URL,
         "openai" => DEFAULT_OPENAI_VLM_BASE_URL,
         _ => DEFAULT_OLLAMA_VLM_BASE_URL,
     }
@@ -220,7 +223,8 @@ fn normalize_vlm_chat_base_url(provider: &str, base_url: Option<&str>) -> String
 
 /// Send a screenshot to the VLM for analysis.
 /// When `vlm_provider` is "llm", delegates to the active LlmService provider.
-/// Otherwise uses the independently configured VLM endpoint (ollama / openai).
+/// Otherwise uses the independently configured VLM endpoint (ollama / openai /
+/// anthropic / llama.cpp).
 pub async fn analyze_screenshot(
     client: &Client,
     config: &VisionConfig,
@@ -248,8 +252,30 @@ pub async fn analyze_screenshot(
         };
 
         provider.chat(messages, Some(params)).await
+    } else if config.vlm_provider == "anthropic" {
+        // ── Independent Anthropic Messages API endpoint ───────────────────
+        let model = config.vlm_model.trim();
+        let model = (!model.is_empty()).then(|| model.to_string());
+        let provider = AnthropicProvider::new(
+            config.vlm_api_key.clone().unwrap_or_default(),
+            config.vlm_base_url.clone(),
+            model,
+        );
+
+        let messages = vec![user_message_with_images(
+            VISION_PROMPT.to_string(),
+            vec![data_url],
+        )];
+
+        let params = LlmParams {
+            max_tokens: Some(150),
+            temperature: Some(0.3),
+            ..Default::default()
+        };
+
+        provider.chat(messages, Some(params)).await
     } else {
-        // ── Independent VLM endpoint (ollama / openai) ─────────────────────
+        // ── Independent OpenAI-compatible VLM endpoint ─────────────────────
         let chat_base_url =
             normalize_vlm_chat_base_url(&config.vlm_provider, config.vlm_base_url.as_deref());
         let url = format!("{}/chat/completions", chat_base_url);
@@ -309,7 +335,12 @@ pub async fn analyze_screenshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_proactive_vision_instruction, normalize_vlm_chat_base_url};
+    use super::{
+        analyze_screenshot, build_proactive_vision_instruction, normalize_vlm_chat_base_url,
+    };
+    use crate::vision::config::VisionConfig;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn normalizes_llama_cpp_root_to_openai_compatible_chat_url() {
@@ -341,5 +372,61 @@ mod tests {
         assert!(instruction.contains("用户的电脑屏幕上目前正在显示的是"));
         assert!(instruction.contains("不要表现得像在监视用户"));
         assert!(instruction.contains("代码是谁写的或谁改的"));
+    }
+
+    #[tokio::test]
+    async fn analyze_screenshot_uses_anthropic_messages_api() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "test-key"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [
+                    { "type": "text", "text": "A concise screen description." }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = VisionConfig::default();
+        config.vlm_provider = "anthropic".to_string();
+        config.vlm_base_url = Some(format!("{}/v1", mock_server.uri()));
+        config.vlm_model = "claude-3-5-sonnet-20241022".to_string();
+        config.vlm_api_key = Some("test-key".to_string());
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let description = analyze_screenshot(&client, &config, b"fake-jpeg", None)
+            .await
+            .expect("anthropic screenshot analysis should succeed");
+
+        assert_eq!(description, "A concise screen description.");
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("mock server should capture requests");
+        assert_eq!(requests.len(), 1);
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("request body should be JSON");
+        assert_eq!(payload["model"], "claude-3-5-sonnet-20241022");
+        assert_eq!(payload["max_tokens"], 150);
+        assert_eq!(payload["temperature"], 0.3);
+        assert_eq!(payload["messages"][0]["role"], "user");
+        assert_eq!(payload["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(payload["messages"][0]["content"][1]["type"], "image");
+        assert_eq!(
+            payload["messages"][0]["content"][1]["source"]["type"],
+            "base64"
+        );
+        assert_eq!(
+            payload["messages"][0]["content"][1]["source"]["media_type"],
+            "image/jpeg"
+        );
+        assert!(payload["messages"][0]["content"][1]["source"]["data"]
+            .as_str()
+            .is_some_and(|data| !data.is_empty()));
     }
 }

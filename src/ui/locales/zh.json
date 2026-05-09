@@ -680,6 +680,7 @@
                 "ollama": "Ollama (本地 - 推荐)",
                 "llama_cpp": "llama.cpp (本地 VLM)",
                 "openai": "OpenAI",
+                "anthropic": "Anthropic 兼容",
                 "llm": "使用当前大模型 (多模态)",
                 "llm_note": "将直接使用「API」页面配置的大模型服务商处理截图，无需单独配置 VLM。请确保所选模型支持图像输入（如 GPT-4o、Claude 3、Gemini 等）。"
             },
@@ -689,13 +690,17 @@
             "llama_cpp": {
                 "warning": "无法连接到 llama.cpp。请确保兼容 OpenAI 的 llama.cpp 服务已启动，并运行在"
             },
+            "anthropic": {
+                "warning": "无法连接到 Anthropic 兼容 VLM 服务。请检查基础 URL、API 密钥和模型访问权限："
+            },
             "base_url": "基础 URL",
             "model": {
                 "label": "模型",
                 "recommend": {
                     "ollama": "推荐: minicpm-v, moondream2, llava",
                     "llama_cpp": "推荐: minicpm-v, Qwen2.5-VL, LLaVA",
-                    "openai": "推荐: gpt-4o (支持视觉)"
+                    "openai": "推荐: gpt-4o (支持视觉)",
+                    "anthropic": "推荐: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022"
                 },
                 "not_installed_prefix": "(未安装)",
                 "install_warning": "模型 \"{{model}}\" 未安装",

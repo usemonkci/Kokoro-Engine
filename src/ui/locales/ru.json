@@ -680,6 +680,7 @@
         "ollama": "Ollama (локально — рекомендуется)",
         "llama_cpp": "llama.cpp (локальный VLM)",
         "openai": "OpenAI",
+        "anthropic": "Anthropic-совместимый",
         "llm": "Использовать активную LLM (мультимодальную)",
         "llm_note": "Скриншоты будут отправляться напрямую к поставщику LLM, настроенному во вкладке API, — отдельная настройка VLM не нужна. Убедитесь, что активная модель поддерживает изображения (например, GPT-4o, Claude 3, Gemini)."
       },
@@ -689,13 +690,17 @@
       "llama_cpp": {
         "warning": "Не удаётся подключиться к llama.cpp. Убедитесь, что OpenAI-совместимый сервер llama.cpp запущен по адресу"
       },
+      "anthropic": {
+        "warning": "Не удаётся подключиться к Anthropic-совместимому поставщику VLM. Проверьте базовый URL, API-ключ и доступ к модели по адресу"
+      },
       "base_url": "Базовый URL",
       "model": {
         "label": "Модель",
         "recommend": {
           "ollama": "Рекомендуется: minicpm-v, moondream2, llava",
           "llama_cpp": "Рекомендуется: minicpm-v, Qwen2.5-VL, LLaVA",
-          "openai": "Рекомендуется: gpt-4o (поддерживает зрение)"
+          "openai": "Рекомендуется: gpt-4o (поддерживает зрение)",
+          "anthropic": "Рекомендуется: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022"
         },
         "not_installed_prefix": "(не установлено)",
         "install_warning": "Модель \"{{model}}\" не установлена",

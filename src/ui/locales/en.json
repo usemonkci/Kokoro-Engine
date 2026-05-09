@@ -680,6 +680,7 @@
                 "ollama": "Ollama (Local — Recommended)",
                 "llama_cpp": "llama.cpp (Local VLM)",
                 "openai": "OpenAI",
+                "anthropic": "Anthropic-Compatible",
                 "llm": "Use Active LLM (Multimodal)",
                 "llm_note": "Screenshots will be sent directly to the LLM provider configured in the API tab — no separate VLM setup needed. Make sure your active model supports image input (e.g. GPT-4o, Claude 3, Gemini)."
             },
@@ -689,13 +690,17 @@
             "llama_cpp": {
                 "warning": "Cannot connect to llama.cpp. Make sure the OpenAI-compatible llama.cpp server is running at"
             },
+            "anthropic": {
+                "warning": "Cannot connect to the Anthropic-compatible VLM provider. Check the Base URL, API key, and model access at"
+            },
             "base_url": "Base URL",
             "model": {
                 "label": "Model",
                 "recommend": {
                     "ollama": "Recommended: minicpm-v, moondream2, llava",
                     "llama_cpp": "Recommended: minicpm-v, Qwen2.5-VL, LLaVA",
-                    "openai": "Recommended: gpt-4o (supports vision)"
+                    "openai": "Recommended: gpt-4o (supports vision)",
+                    "anthropic": "Recommended: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022"
                 },
                 "not_installed_prefix": "(not installed)",
                 "install_warning": "Model \"{{model}}\" is not installed",
