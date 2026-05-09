@@ -71,9 +71,74 @@ struct MemoryMetadata {
     canonical_content: Option<String>,
 }
 
+struct NewMemoryCandidate<'a> {
+    content: &'a str,
+    character_id: &'a str,
+    importance: f64,
+    confidence: f64,
+    metadata: &'a MemoryMetadata,
+    canonical_hash: &'a str,
+    now: i64,
+}
+
+struct MemoryOperationRecord<'a> {
+    character_id: &'a str,
+    operation_type: &'a str,
+    actor: &'a str,
+    memory_id: Option<i64>,
+    proposal_id: Option<i64>,
+    before_json: Option<String>,
+    after_json: Option<String>,
+}
+
+struct EntitySlotUpsert<'a> {
+    content: &'a str,
+    embedding_bytes: &'a [u8],
+    character_id: &'a str,
+    importance: f64,
+    metadata: &'a MemoryMetadata,
+    canonical_hash: &'a str,
+    now: i64,
+}
+
+struct ActiveMemoryInsert<'a> {
+    content: &'a str,
+    embedding_bytes: Vec<u8>,
+    character_id: &'a str,
+    importance: f64,
+    metadata: &'a MemoryMetadata,
+    canonical_hash: &'a str,
+    now: i64,
+}
+
+struct DreamProposalInsert<'a> {
+    character_id: &'a str,
+    proposal_type: &'a str,
+    status: &'a str,
+    confidence: f64,
+    title: &'a str,
+    rationale: &'a str,
+    source_memory_ids: &'a [i64],
+    target_memory_id: Option<i64>,
+    proposed_content: Option<&'a str>,
+    proposed_memory_type: Option<&'a str>,
+    proposed_entity_key: Option<&'a str>,
+    impact: &'a str,
+}
+
+struct DreamAutoMergeRequest<'a> {
+    character_id: &'a str,
+    entries: &'a [&'a DreamCandidateEntry],
+    proposal_type: &'a str,
+    title: &'a str,
+    rationale: &'a str,
+    confidence: f64,
+    proposed_content_override: Option<&'a str>,
+    preferred_keeper_id: Option<i64>,
+}
+
 fn normalize_memory_text(content: &str) -> String {
     content
-        .trim()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -2091,29 +2156,20 @@ impl MemoryManager {
             .await
     }
 
-    async fn insert_memory_candidate(
-        &self,
-        content: &str,
-        character_id: &str,
-        importance: f64,
-        confidence: f64,
-        metadata: &MemoryMetadata,
-        canonical_hash: &str,
-        now: i64,
-    ) -> Result<i64> {
+    async fn insert_memory_candidate(&self, candidate: NewMemoryCandidate<'_>) -> Result<i64> {
         let result = sqlx::query(
             "INSERT INTO memory_candidates \
              (character_id, content, memory_type, entity_key, importance, confidence, canonical_hash, source_kind, source_refs, decision, created_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, 'extractor', '[]', 'pending', ?)",
         )
-        .bind(character_id)
-        .bind(content)
-        .bind(&metadata.memory_type)
-        .bind(metadata.entity_key.as_deref())
-        .bind(importance.clamp(0.0, 1.0))
-        .bind(confidence.clamp(0.0, 1.0))
-        .bind(canonical_hash)
-        .bind(now)
+        .bind(candidate.character_id)
+        .bind(candidate.content)
+        .bind(&candidate.metadata.memory_type)
+        .bind(candidate.metadata.entity_key.as_deref())
+        .bind(candidate.importance.clamp(0.0, 1.0))
+        .bind(candidate.confidence.clamp(0.0, 1.0))
+        .bind(candidate.canonical_hash)
+        .bind(candidate.now)
         .execute(&self.db)
         .await?;
         Ok(result.last_insert_rowid())
@@ -2137,28 +2193,19 @@ impl MemoryManager {
         Ok(())
     }
 
-    async fn record_memory_operation(
-        &self,
-        character_id: &str,
-        operation_type: &str,
-        actor: &str,
-        memory_id: Option<i64>,
-        proposal_id: Option<i64>,
-        before_json: Option<String>,
-        after_json: Option<String>,
-    ) -> Result<()> {
+    async fn record_memory_operation(&self, operation: MemoryOperationRecord<'_>) -> Result<()> {
         sqlx::query(
             "INSERT INTO memory_operations \
              (character_id, operation_type, actor, memory_id, proposal_id, before_json, after_json, created_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(character_id)
-        .bind(operation_type)
-        .bind(actor)
-        .bind(memory_id)
-        .bind(proposal_id)
-        .bind(before_json)
-        .bind(after_json)
+        .bind(operation.character_id)
+        .bind(operation.operation_type)
+        .bind(operation.actor)
+        .bind(operation.memory_id)
+        .bind(operation.proposal_id)
+        .bind(operation.before_json)
+        .bind(operation.after_json)
         .bind(now_ts())
         .execute(&self.db)
         .await?;
@@ -2210,30 +2257,24 @@ impl MemoryManager {
         .execute(&self.db)
         .await?;
 
-        self.record_memory_operation(
+        self.record_memory_operation(MemoryOperationRecord {
             character_id,
-            "deduplicate_exact",
-            "memory_pipeline",
-            Some(id),
-            None,
-            None,
-            Some(serde_json::json!({ "importance": best_importance, "evidence_count": evidence_count + 1 }).to_string()),
-        )
+            operation_type: "deduplicate_exact",
+            actor: "memory_pipeline",
+            memory_id: Some(id),
+            proposal_id: None,
+            before_json: None,
+            after_json: Some(
+                serde_json::json!({ "importance": best_importance, "evidence_count": evidence_count + 1 })
+                    .to_string(),
+            ),
+        })
         .await?;
         Ok(Some(id))
     }
 
-    async fn upsert_entity_slot_memory(
-        &self,
-        content: &str,
-        embedding_bytes: &[u8],
-        character_id: &str,
-        importance: f64,
-        metadata: &MemoryMetadata,
-        canonical_hash: &str,
-        now: i64,
-    ) -> Result<Option<i64>> {
-        let Some(entity_key) = metadata.entity_key.as_deref() else {
+    async fn upsert_entity_slot_memory(&self, upsert: EntitySlotUpsert<'_>) -> Result<Option<i64>> {
+        let Some(entity_key) = upsert.metadata.entity_key.as_deref() else {
             return Ok(None);
         };
 
@@ -2242,8 +2283,8 @@ impl MemoryManager {
              WHERE character_id = ? AND memory_type = ? AND entity_key = ? AND status = 'active' \
              ORDER BY importance DESC, updated_at DESC LIMIT 1",
         )
-        .bind(character_id)
-        .bind(&metadata.memory_type)
+        .bind(upsert.character_id)
+        .bind(&upsert.metadata.memory_type)
         .bind(entity_key)
         .fetch_optional(&self.db)
         .await?;
@@ -2257,22 +2298,22 @@ impl MemoryManager {
         let existing_importance: f64 = row.get("importance");
         let evidence_count: i64 = row.get("evidence_count");
         let first_seen_at: i64 = row.get("first_seen_at");
-        let best_importance = existing_importance.max(importance.clamp(0.0, 1.0));
+        let best_importance = existing_importance.max(upsert.importance.clamp(0.0, 1.0));
         let tier = if best_importance >= 0.8 {
             "core"
         } else {
             "ephemeral"
         };
-        let merged_content = metadata
+        let merged_content = upsert.metadata
             .canonical_content
             .as_deref()
-            .unwrap_or(content)
+            .unwrap_or(upsert.content)
             .trim()
             .to_string();
         let update_embedding = if merged_content == existing_content {
             None
         } else {
-            Some(embedding_bytes.to_vec())
+            Some(upsert.embedding_bytes.to_vec())
         };
 
         if let Some(bytes) = update_embedding {
@@ -2284,13 +2325,13 @@ impl MemoryManager {
             )
             .bind(&merged_content)
             .bind(bytes)
-            .bind(now)
+            .bind(upsert.now)
             .bind(best_importance)
             .bind(tier)
             .bind(DREAM_CONFIDENCE_AUTO_APPLY)
-            .bind(now)
+            .bind(upsert.now)
             .bind(evidence_count.saturating_add(1))
-            .bind(canonical_hash)
+            .bind(upsert.canonical_hash)
             .bind(id)
             .execute(&self.db)
             .await?;
@@ -2300,46 +2341,44 @@ impl MemoryManager {
                  SET updated_at = ?, importance = ?, tier = ?, confidence = ?, last_seen_at = ?, evidence_count = ? \
                  WHERE id = ?",
             )
-            .bind(now)
+            .bind(upsert.now)
             .bind(best_importance)
             .bind(tier)
             .bind(DREAM_CONFIDENCE_AUTO_APPLY)
-            .bind(now)
+            .bind(upsert.now)
             .bind(evidence_count.saturating_add(1))
             .bind(id)
             .execute(&self.db)
             .await?;
         }
 
-        self.record_memory_operation(
-            character_id,
-            "entity_slot_upsert",
-            "memory_pipeline",
-            Some(id),
-            None,
-            Some(serde_json::json!({ "content": existing_content, "first_seen_at": first_seen_at }).to_string()),
-            Some(serde_json::json!({ "content": merged_content, "last_seen_at": now, "evidence_count": evidence_count + 1 }).to_string()),
-        )
+        self.record_memory_operation(MemoryOperationRecord {
+            character_id: upsert.character_id,
+            operation_type: "entity_slot_upsert",
+            actor: "memory_pipeline",
+            memory_id: Some(id),
+            proposal_id: None,
+            before_json: Some(
+                serde_json::json!({ "content": existing_content, "first_seen_at": first_seen_at })
+                    .to_string(),
+            ),
+            after_json: Some(
+                serde_json::json!({ "content": merged_content, "last_seen_at": upsert.now, "evidence_count": evidence_count + 1 })
+                    .to_string(),
+            ),
+        })
         .await?;
         Ok(Some(id))
     }
 
-    async fn insert_active_memory(
-        &self,
-        content: &str,
-        embedding_bytes: Vec<u8>,
-        character_id: &str,
-        importance: f64,
-        metadata: &MemoryMetadata,
-        canonical_hash: &str,
-        now: i64,
-    ) -> Result<i64> {
-        let clamped = importance.clamp(0.0, 1.0);
+    async fn insert_active_memory(&self, insert: ActiveMemoryInsert<'_>) -> Result<i64> {
+        let clamped = insert.importance.clamp(0.0, 1.0);
         let tier = if clamped >= 0.8 { "core" } else { "ephemeral" };
-        let storage_content = metadata
+        let storage_content = insert
+            .metadata
             .canonical_content
             .as_deref()
-            .unwrap_or(content)
+            .unwrap_or(insert.content)
             .trim()
             .to_string();
 
@@ -2351,31 +2390,34 @@ impl MemoryManager {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 1, 'extractor', '[]', ?)",
         )
         .bind(&storage_content)
-        .bind(embedding_bytes)
-        .bind(now)
-        .bind(now)
+        .bind(insert.embedding_bytes)
+        .bind(insert.now)
+        .bind(insert.now)
         .bind(clamped)
-        .bind(character_id)
+        .bind(insert.character_id)
         .bind(tier)
-        .bind(&metadata.memory_type)
-        .bind(metadata.entity_key.as_deref())
+        .bind(&insert.metadata.memory_type)
+        .bind(insert.metadata.entity_key.as_deref())
         .bind(DREAM_CONFIDENCE_AUTO_APPLY)
-        .bind(now)
-        .bind(now)
-        .bind(canonical_hash)
+        .bind(insert.now)
+        .bind(insert.now)
+        .bind(insert.canonical_hash)
         .execute(&self.db)
         .await?;
 
         let id = result.last_insert_rowid();
-        self.record_memory_operation(
-            character_id,
-            "insert_active",
-            "memory_pipeline",
-            Some(id),
-            None,
-            None,
-            Some(serde_json::json!({ "content": storage_content, "memory_type": metadata.memory_type, "entity_key": metadata.entity_key }).to_string()),
-        )
+        self.record_memory_operation(MemoryOperationRecord {
+            character_id: insert.character_id,
+            operation_type: "insert_active",
+            actor: "memory_pipeline",
+            memory_id: Some(id),
+            proposal_id: None,
+            before_json: None,
+            after_json: Some(
+                serde_json::json!({ "content": storage_content, "memory_type": insert.metadata.memory_type, "entity_key": insert.metadata.entity_key })
+                    .to_string(),
+            ),
+        })
         .await?;
         Ok(id)
     }
@@ -3062,15 +3104,15 @@ impl MemoryManager {
         let embedding_bytes: Vec<u8> = bincode::serialize(&embedding)?;
         let now = now_ts();
         let candidate_id = self
-            .insert_memory_candidate(
+            .insert_memory_candidate(NewMemoryCandidate {
                 content,
                 character_id,
                 importance,
-                DREAM_CONFIDENCE_AUTO_APPLY,
-                &metadata,
-                &hash,
+                confidence: DREAM_CONFIDENCE_AUTO_APPLY,
+                metadata: &metadata,
+                canonical_hash: &hash,
                 now,
-            )
+            })
             .await?;
 
         if let Some(id) = self
@@ -3083,15 +3125,15 @@ impl MemoryManager {
         }
 
         if let Some(id) = self
-            .upsert_entity_slot_memory(
+            .upsert_entity_slot_memory(EntitySlotUpsert {
                 content,
-                &embedding_bytes,
+                embedding_bytes: &embedding_bytes,
                 character_id,
                 importance,
-                &metadata,
-                &hash,
+                metadata: &metadata,
+                canonical_hash: &hash,
                 now,
-            )
+            })
             .await?
         {
             self.mark_candidate_decision(candidate_id, "updated", Some(id))
@@ -3110,15 +3152,15 @@ impl MemoryManager {
         }
 
         let memory_id = self
-            .insert_active_memory(
+            .insert_active_memory(ActiveMemoryInsert {
                 content,
                 embedding_bytes,
                 character_id,
                 importance,
-                &metadata,
-                &hash,
+                metadata: &metadata,
+                canonical_hash: &hash,
                 now,
-            )
+            })
             .await?;
         self.mark_candidate_decision(candidate_id, "inserted", Some(memory_id))
             .await?;
@@ -3166,20 +3208,20 @@ impl MemoryManager {
                 let existing_content: String = row.get("content");
                 if is_likely_contradiction(new_content, &existing_content) {
                     let id: i64 = row.get("id");
-                    self.create_dream_proposal(
+                    self.create_dream_proposal(DreamProposalInsert {
                         character_id,
-                        "conflict_review",
-                        "pending",
-                        f64::from(sim),
-                        "Review possible memory conflict",
-                        "A new memory appears to contradict an existing active memory.",
-                        &[id],
-                        Some(id),
-                        Some(new_content),
-                        None,
-                        None,
-                        "Manual review required before invalidating or replacing the older memory.",
-                    )
+                        proposal_type: "conflict_review",
+                        status: "pending",
+                        confidence: f64::from(sim),
+                        title: "Review possible memory conflict",
+                        rationale: "A new memory appears to contradict an existing active memory.",
+                        source_memory_ids: &[id],
+                        target_memory_id: Some(id),
+                        proposed_content: Some(new_content),
+                        proposed_memory_type: None,
+                        proposed_entity_key: None,
+                        impact: "Manual review required before invalidating or replacing the older memory.",
+                    })
                     .await?;
                     invalidated += 1;
                     tracing::info!(
@@ -3304,23 +3346,9 @@ impl MemoryManager {
         Ok(())
     }
 
-    async fn create_dream_proposal(
-        &self,
-        character_id: &str,
-        proposal_type: &str,
-        status: &str,
-        confidence: f64,
-        title: &str,
-        rationale: &str,
-        source_memory_ids: &[i64],
-        target_memory_id: Option<i64>,
-        proposed_content: Option<&str>,
-        proposed_memory_type: Option<&str>,
-        proposed_entity_key: Option<&str>,
-        impact: &str,
-    ) -> Result<i64> {
+    async fn create_dream_proposal(&self, proposal: DreamProposalInsert<'_>) -> Result<i64> {
         let now = now_ts();
-        let applied_at = if matches!(status, "auto_applied" | "approved") {
+        let applied_at = if matches!(proposal.status, "auto_applied" | "approved") {
             Some(now)
         } else {
             None
@@ -3332,18 +3360,18 @@ impl MemoryManager {
               created_at, updated_at, applied_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(character_id)
-        .bind(proposal_type)
-        .bind(status)
-        .bind(confidence.clamp(0.0, 1.0))
-        .bind(title)
-        .bind(rationale)
-        .bind(proposal_ids_json(source_memory_ids)?)
-        .bind(target_memory_id)
-        .bind(proposed_content)
-        .bind(proposed_memory_type)
-        .bind(proposed_entity_key)
-        .bind(impact)
+        .bind(proposal.character_id)
+        .bind(proposal.proposal_type)
+        .bind(proposal.status)
+        .bind(proposal.confidence.clamp(0.0, 1.0))
+        .bind(proposal.title)
+        .bind(proposal.rationale)
+        .bind(proposal_ids_json(proposal.source_memory_ids)?)
+        .bind(proposal.target_memory_id)
+        .bind(proposal.proposed_content)
+        .bind(proposal.proposed_memory_type)
+        .bind(proposal.proposed_entity_key)
+        .bind(proposal.impact)
         .bind(now)
         .bind(now)
         .bind(applied_at)
@@ -3426,17 +3454,18 @@ impl MemoryManager {
         self.choose_dream_keeper(entries)
     }
 
-    async fn auto_merge_dream_group(
-        &self,
-        character_id: &str,
-        entries: &[&DreamCandidateEntry],
-        proposal_type: &str,
-        title: &str,
-        rationale: &str,
-        confidence: f64,
-        proposed_content_override: Option<&str>,
-        preferred_keeper_id: Option<i64>,
-    ) -> Result<i64> {
+    async fn auto_merge_dream_group(&self, request: DreamAutoMergeRequest<'_>) -> Result<i64> {
+        let DreamAutoMergeRequest {
+            character_id,
+            entries,
+            proposal_type,
+            title,
+            rationale,
+            confidence,
+            proposed_content_override,
+            preferred_keeper_id,
+        } = request;
+
         if entries.len() < 2 {
             return Ok(0);
         }
@@ -3514,34 +3543,34 @@ impl MemoryManager {
         }
 
         let proposal_id = self
-            .create_dream_proposal(
+            .create_dream_proposal(DreamProposalInsert {
                 character_id,
                 proposal_type,
-                "auto_applied",
+                status: "auto_applied",
                 confidence,
                 title,
                 rationale,
-                &source_ids,
-                Some(keeper.id),
-                Some(&merged_content),
-                Some(&keeper.memory_type),
-                keeper.entity_key.as_deref(),
-                "Auto-merged duplicate active memories; source rows were marked superseded.",
-            )
+                source_memory_ids: &source_ids,
+                target_memory_id: Some(keeper.id),
+                proposed_content: Some(&merged_content),
+                proposed_memory_type: Some(&keeper.memory_type),
+                proposed_entity_key: keeper.entity_key.as_deref(),
+                impact: "Auto-merged duplicate active memories; source rows were marked superseded.",
+            })
             .await?;
 
-        self.record_memory_operation(
+        self.record_memory_operation(MemoryOperationRecord {
             character_id,
-            proposal_type,
-            "dreaming",
-            Some(keeper.id),
-            Some(proposal_id),
-            Some(serde_json::json!({ "source_memory_ids": source_ids }).to_string()),
-            Some(
+            operation_type: proposal_type,
+            actor: "dreaming",
+            memory_id: Some(keeper.id),
+            proposal_id: Some(proposal_id),
+            before_json: Some(serde_json::json!({ "source_memory_ids": source_ids }).to_string()),
+            after_json: Some(
                 serde_json::json!({ "keeper_id": keeper.id, "superseded_ids": superseded_ids })
                     .to_string(),
             ),
-        )
+        })
         .await?;
         Ok(1)
     }
@@ -3555,20 +3584,20 @@ impl MemoryManager {
     ) -> Result<i64> {
         let pair_entries = [a, b];
         let keeper = self.choose_dream_keeper(&pair_entries);
-        self.create_dream_proposal(
+        self.create_dream_proposal(DreamProposalInsert {
             character_id,
-            "semantic_review",
-            "pending",
-            f64::from(similarity),
-            "Review similar memories",
-            "These memories are semantically similar but below the automatic merge threshold.",
-            &[a.id, b.id],
-            Some(keeper.id),
-            Some(&keeper.content),
-            Some(&keeper.memory_type),
-            keeper.entity_key.as_deref(),
-            "Manual review required before superseding either memory.",
-        )
+            proposal_type: "semantic_review",
+            status: "pending",
+            confidence: f64::from(similarity),
+            title: "Review similar memories",
+            rationale: "These memories are semantically similar but below the automatic merge threshold.",
+            source_memory_ids: &[a.id, b.id],
+            target_memory_id: Some(keeper.id),
+            proposed_content: Some(&keeper.content),
+            proposed_memory_type: Some(&keeper.memory_type),
+            proposed_entity_key: keeper.entity_key.as_deref(),
+            impact: "Manual review required before superseding either memory.",
+        })
         .await
     }
 
@@ -3700,25 +3729,25 @@ impl MemoryManager {
             };
             let fallback_content = strip_structured_memory_prefix(&target.content).to_string();
 
-            self.create_dream_proposal(
+            self.create_dream_proposal(DreamProposalInsert {
                 character_id,
                 proposal_type,
-                "pending",
+                status: "pending",
                 confidence,
                 title,
                 rationale,
-                &source_ids,
-                Some(target.id),
-                proposal
+                source_memory_ids: &source_ids,
+                target_memory_id: Some(target.id),
+                proposed_content: proposal
                     .proposed_content
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .or(Some(fallback_content.as_str())),
-                proposal.memory_type.as_deref().or(Some(&target.memory_type)),
-                proposal.entity_key.as_deref().or(target.entity_key.as_deref()),
-                "Manual review required because this relation was discovered by LLM rather than deterministic similarity.",
-            )
+                proposed_memory_type: proposal.memory_type.as_deref().or(Some(&target.memory_type)),
+                proposed_entity_key: proposal.entity_key.as_deref().or(target.entity_key.as_deref()),
+                impact: "Manual review required because this relation was discovered by LLM rather than deterministic similarity.",
+            })
             .await?;
             proposals += 1;
         }
@@ -3854,16 +3883,16 @@ impl MemoryManager {
                 continue;
             }
             auto_applied += self
-                .auto_merge_dream_group(
+                .auto_merge_dream_group(DreamAutoMergeRequest {
                     character_id,
-                    group,
-                    "canonical_duplicate",
-                    "Merged exact duplicate memories",
-                    "Dream Light found duplicate canonical hashes.",
-                    1.0,
-                    None,
-                    None,
-                )
+                    entries: group,
+                    proposal_type: "canonical_duplicate",
+                    title: "Merged exact duplicate memories",
+                    rationale: "Dream Light found duplicate canonical hashes.",
+                    confidence: 1.0,
+                    proposed_content_override: None,
+                    preferred_keeper_id: None,
+                })
                 .await?;
             for entry in group {
                 processed.insert(entry.id);
@@ -3887,16 +3916,16 @@ impl MemoryManager {
                 continue;
             }
             auto_applied += self
-                .auto_merge_dream_group(
+                .auto_merge_dream_group(DreamAutoMergeRequest {
                     character_id,
-                    group,
-                    "entity_slot_merge",
-                    "Merged duplicate slot memories",
-                    "Dream REM found multiple active memories for the same structured slot.",
-                    DREAM_CONFIDENCE_AUTO_APPLY,
-                    None,
-                    None,
-                )
+                    entries: group,
+                    proposal_type: "entity_slot_merge",
+                    title: "Merged duplicate slot memories",
+                    rationale: "Dream REM found multiple active memories for the same structured slot.",
+                    confidence: DREAM_CONFIDENCE_AUTO_APPLY,
+                    proposed_content_override: None,
+                    preferred_keeper_id: None,
+                })
                 .await?;
             for entry in group {
                 processed.insert(entry.id);
@@ -3935,19 +3964,19 @@ impl MemoryManager {
                                 {
                                     let pair_entries = [a, b];
                                     auto_applied += self
-                                        .auto_merge_dream_group(
+                                        .auto_merge_dream_group(DreamAutoMergeRequest {
                                             character_id,
-                                            &pair_entries,
-                                            "llm_semantic_auto_merge",
-                                            "Merged LLM-confirmed memories",
-                                            assessment
+                                            entries: &pair_entries,
+                                            proposal_type: "llm_semantic_auto_merge",
+                                            title: "Merged LLM-confirmed memories",
+                                            rationale: assessment
                                                 .rationale
                                                 .as_deref()
                                                 .unwrap_or("LLM confirmed these memories are safely mergeable."),
                                             confidence,
-                                            assessment.merged_memory.as_deref(),
-                                            assessment.canonical_memory_id,
-                                        )
+                                            proposed_content_override: assessment.merged_memory.as_deref(),
+                                            preferred_keeper_id: assessment.canonical_memory_id,
+                                        })
                                         .await?;
                                     processed.insert(a.id);
                                     processed.insert(b.id);
@@ -3957,23 +3986,23 @@ impl MemoryManager {
                                 if decision == "conflict" {
                                     let pair_entries = [a, b];
                                     let keeper = self.choose_dream_keeper(&pair_entries);
-                                    self.create_dream_proposal(
+                                    self.create_dream_proposal(DreamProposalInsert {
                                         character_id,
-                                        "llm_conflict_review",
-                                        "pending",
+                                        proposal_type: "llm_conflict_review",
+                                        status: "pending",
                                         confidence,
-                                        "Review LLM-detected memory conflict",
-                                        assessment
+                                        title: "Review LLM-detected memory conflict",
+                                        rationale: assessment
                                             .rationale
                                             .as_deref()
                                             .unwrap_or("LLM detected a possible contradiction."),
-                                        &[a.id, b.id],
-                                        Some(keeper.id),
-                                        assessment.merged_memory.as_deref(),
-                                        assessment.memory_type.as_deref(),
-                                        assessment.entity_key.as_deref(),
-                                        "Manual review required before changing either active memory.",
-                                    )
+                                        source_memory_ids: &[a.id, b.id],
+                                        target_memory_id: Some(keeper.id),
+                                        proposed_content: assessment.merged_memory.as_deref(),
+                                        proposed_memory_type: assessment.memory_type.as_deref(),
+                                        proposed_entity_key: assessment.entity_key.as_deref(),
+                                        impact: "Manual review required before changing either active memory.",
+                                    })
                                     .await?;
                                     proposals += 1;
                                     continue;
@@ -3985,23 +4014,23 @@ impl MemoryManager {
 
                                 let pair_entries = [a, b];
                                 let keeper = self.choose_dream_keeper(&pair_entries);
-                                self.create_dream_proposal(
+                                self.create_dream_proposal(DreamProposalInsert {
                                     character_id,
-                                    "llm_semantic_review",
-                                    "pending",
+                                    proposal_type: "llm_semantic_review",
+                                    status: "pending",
                                     confidence,
-                                    "Review LLM memory merge suggestion",
-                                    assessment
+                                    title: "Review LLM memory merge suggestion",
+                                    rationale: assessment
                                         .rationale
                                         .as_deref()
                                         .unwrap_or("LLM suggested reviewing these similar memories."),
-                                    &[a.id, b.id],
-                                    Some(keeper.id),
-                                    assessment.merged_memory.as_deref(),
-                                    assessment.memory_type.as_deref(),
-                                    assessment.entity_key.as_deref(),
-                                    "Manual review required because confidence was below the auto-apply threshold.",
-                                )
+                                    source_memory_ids: &[a.id, b.id],
+                                    target_memory_id: Some(keeper.id),
+                                    proposed_content: assessment.merged_memory.as_deref(),
+                                    proposed_memory_type: assessment.memory_type.as_deref(),
+                                    proposed_entity_key: assessment.entity_key.as_deref(),
+                                    impact: "Manual review required because confidence was below the auto-apply threshold.",
+                                })
                                 .await?;
                                 proposals += 1;
                                 continue;
@@ -4017,16 +4046,16 @@ impl MemoryManager {
                     }
                     let pair_entries = [a, b];
                     auto_applied += self
-                        .auto_merge_dream_group(
+                        .auto_merge_dream_group(DreamAutoMergeRequest {
                             character_id,
-                            &pair_entries,
-                            "semantic_auto_merge",
-                            "Merged highly similar memories",
-                            "Dream Deep found a high-confidence semantic duplicate.",
-                            f64::from(sim),
-                            None,
-                            None,
-                        )
+                            entries: &pair_entries,
+                            proposal_type: "semantic_auto_merge",
+                            title: "Merged highly similar memories",
+                            rationale: "Dream Deep found a high-confidence semantic duplicate.",
+                            confidence: f64::from(sim),
+                            proposed_content_override: None,
+                            preferred_keeper_id: None,
+                        })
                         .await?;
                     processed.insert(a.id);
                     processed.insert(b.id);
@@ -4317,18 +4346,18 @@ impl MemoryManager {
         .execute(&self.db)
         .await?;
 
-        self.record_memory_operation(
-            &proposal.character_id,
-            &proposal.proposal_type,
-            "user",
-            Some(target_id),
-            Some(proposal_id),
-            Some(serde_json::json!({ "source_memory_ids": source_ids }).to_string()),
-            Some(
+        self.record_memory_operation(MemoryOperationRecord {
+            character_id: &proposal.character_id,
+            operation_type: &proposal.proposal_type,
+            actor: "user",
+            memory_id: Some(target_id),
+            proposal_id: Some(proposal_id),
+            before_json: Some(serde_json::json!({ "source_memory_ids": source_ids }).to_string()),
+            after_json: Some(
                 serde_json::json!({ "target_id": target_id, "superseded_ids": superseded_ids })
                     .to_string(),
             ),
-        )
+        })
         .await?;
         Ok(())
     }
