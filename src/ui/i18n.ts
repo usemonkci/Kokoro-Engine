@@ -4,6 +4,7 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 
 import en from './locales/en.json';
 import zh from './locales/zh.json';
+import zhTW from './locales/zh-TW.json';
 import ja from './locales/ja.json';
 import ko from './locales/ko.json';
 import ru from './locales/ru.json';
@@ -20,6 +21,7 @@ i18n
         resources: {
             en: { translation: en },
             zh: { translation: zh },
+            'zh-TW': { translation: zhTW },
             ja: { translation: ja },
             ko: { translation: ko },
             ru: { translation: ru },
@@ -35,6 +37,21 @@ i18n
             order: ['localStorage', 'navigator'],
             lookupLocalStorage: 'kokoro_app_language',
             caches: ['localStorage'],
+            convertDetectedLanguage: (lng: string) => {
+                const normalized = lng.toLowerCase();
+                if (
+                    normalized.startsWith('zh-tw') ||
+                    normalized.startsWith('zh-hant') ||
+                    normalized.startsWith('zh-hk') ||
+                    normalized.startsWith('zh-mo')
+                ) {
+                    return 'zh-TW';
+                }
+                if (normalized === 'zh-cn' || normalized === 'zh-sg') {
+                    return 'zh';
+                }
+                return lng;
+            },
         }
     });
 

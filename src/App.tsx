@@ -193,13 +193,24 @@ const ONBOARDING_STATUS_KEY = "kokoro_onboarding_status";
 const ONBOARDING_LANGUAGE_NAMES: Record<OnboardingLanguageCode, string> = {
   en: "English",
   zh: "中文",
+  "zh-TW": "繁體中文",
   ja: "日本語",
   ko: "한국어",
   ru: "Русский",
 };
 
 function normalizeOnboardingLanguageCode(language: string | null | undefined): OnboardingLanguageCode {
-  const base = language?.split("-")[0];
+  const normalized = language?.trim().toLowerCase();
+  if (
+    normalized?.startsWith("zh-tw") ||
+    normalized?.startsWith("zh-hant") ||
+    normalized?.startsWith("zh-hk") ||
+    normalized?.startsWith("zh-mo")
+  ) {
+    return "zh-TW";
+  }
+
+  const base = normalized?.split("-")[0];
   switch (base) {
     case "en":
     case "zh":

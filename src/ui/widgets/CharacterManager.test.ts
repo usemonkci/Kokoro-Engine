@@ -7,9 +7,11 @@ import {
 } from "./CharacterManager";
 
 describe("character language presets", () => {
-    it("includes Russian in response and user language presets", () => {
+    it("includes Russian and Traditional Chinese in response and user language presets", () => {
         expect(RESPONSE_LANGUAGE_PRESETS).toContain("Русский");
         expect(USER_LANGUAGE_PRESETS).toContain("Русский");
+        expect(RESPONSE_LANGUAGE_PRESETS).toContain("繁體中文");
+        expect(USER_LANGUAGE_PRESETS).toContain("繁體中文");
     });
 
     it("keeps auto mode and custom mode distinct", () => {

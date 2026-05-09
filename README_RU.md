@@ -1,5 +1,5 @@
 <div align="center">
-  <a href="README.md">简体中文</a> | <a href="README_EN.md">English</a> | <a href="README_JA.md">日本語</a> | <a href="README_KO.md">한국어</a> | <a href="README_RU.md">Русский</a>
+  <a href="README.md">简体中文</a> | <a href="README_ZH-TW.md">繁體中文</a> | <a href="README_EN.md">English</a> | <a href="README_JA.md">日本語</a> | <a href="README_KO.md">한국어</a> | <a href="README_RU.md">Русский</a>
 </div>
 
 <br/>
@@ -45,7 +45,7 @@ Kokoro Engine — это не просто чат-оболочка с внешн
 | Форматы взаимодействия | текст, голос, изображения, vision-вход, мультимодальный диалог |
 | Модель расширения | MOD (HTML/CSS/JS + QuickJS), MCP Servers |
 | Технологии | React + TypeScript + Rust + Tauri v2 + SQLite |
-| Поддержка языков | 简体中文 / English / 日本語 / 한국어 / Русский |
+| Поддержка языков | 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Русский |
 
 ## 📸 Скриншоты интерфейса
 

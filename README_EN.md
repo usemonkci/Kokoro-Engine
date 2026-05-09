@@ -1,5 +1,5 @@
 <div align="center">
-  <a href="README.md">简体中文</a> | <a href="README_EN.md">English</a> | <a href="README_JA.md">日本語</a> | <a href="README_KO.md">한국어</a> | <a href="README_RU.md">Русский</a>
+  <a href="README.md">简体中文</a> | <a href="README_ZH-TW.md">繁體中文</a> | <a href="README_EN.md">English</a> | <a href="README_JA.md">日本語</a> | <a href="README_KO.md">한국어</a> | <a href="README_RU.md">Русский</a>
 </div>
 
 <br/>
@@ -45,7 +45,7 @@ Kokoro Engine is not just a chat shell with a desktop pet skin. It is a complete
 | Interaction modes | text, voice, image, vision input, multimodal dialogue |
 | Extension model | MOD (HTML/CSS/JS + QuickJS), MCP servers |
 | Tech stack | React + TypeScript + Rust + Tauri v2 + SQLite |
-| Language support | 简体中文 / English / 日本語 / 한국어 / Русский |
+| Language support | 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Русский |
 
 ## 📸 UI screenshots
 

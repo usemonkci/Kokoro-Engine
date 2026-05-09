@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { SettingsTabId } from "./SettingsPanel";
 
 export type OnboardingStep = "language" | "open-settings" | "api" | "persona" | "return-home" | "chat";
-export type OnboardingLanguageCode = "en" | "zh" | "ja" | "ko" | "ru";
+export type OnboardingLanguageCode = "en" | "zh" | "zh-TW" | "ja" | "ko" | "ru";
 
 interface OnboardingOverlayProps {
     step: OnboardingStep | null;
@@ -35,7 +35,8 @@ interface StepMeta {
 }
 
 const LANGUAGE_OPTIONS: Array<{ code: OnboardingLanguageCode; label: string }> = [
-    { code: "zh", label: "中文" },
+    { code: "zh", label: "简体中文" },
+    { code: "zh-TW", label: "繁體中文" },
     { code: "en", label: "English" },
     { code: "ja", label: "日本語" },
     { code: "ko", label: "한국어" },

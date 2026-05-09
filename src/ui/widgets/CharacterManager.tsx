@@ -16,8 +16,8 @@ import { Languages, MessageCircle } from "lucide-react";
 import { Select } from "@/components/ui/select";
 import { useTranslation, Trans } from "react-i18next";
 
-export const RESPONSE_LANGUAGE_PRESETS = ["日本語", "English", "中文", "한국어", "Русский"] as const;
-export const USER_LANGUAGE_PRESETS = ["中文", "English", "日本語", "한국어", "Русский"] as const;
+export const RESPONSE_LANGUAGE_PRESETS = ["日本語", "English", "中文", "繁體中文", "한국어", "Русский"] as const;
+export const USER_LANGUAGE_PRESETS = ["中文", "繁體中文", "English", "日本語", "한국어", "Русский"] as const;
 
 export function getLanguageSelectValue(value: string, presets: readonly string[]) {
     if (value === "" || value === "auto") {
@@ -396,7 +396,8 @@ export default function CharacterManager({ onPersonaChange, responseLanguage, on
                         { value: "auto", label: t("settings.persona.response_lang.auto") },
                         { value: "日本語", label: "日本語 (Japanese)" },
                         { value: "English", label: "English" },
-                        { value: "中文", label: "中文 (Chinese)" },
+                        { value: "中文", label: "中文 (Simplified Chinese)" },
+                        { value: "繁體中文", label: "繁體中文 (Traditional Chinese)" },
                         { value: "한국어", label: "한국어 (Korean)" },
                         { value: "Русский", label: "Русский (Russian)" },
                         { value: "__custom__", label: t("settings.persona.user_lang.custom") },
@@ -432,7 +433,8 @@ export default function CharacterManager({ onPersonaChange, responseLanguage, on
                     }}
                     options={[
                         { value: "auto", label: t("settings.persona.user_lang.auto") },
-                        { value: "中文", label: "中文 (Chinese)" },
+                        { value: "中文", label: "中文 (Simplified Chinese)" },
+                        { value: "繁體中文", label: "繁體中文 (Traditional Chinese)" },
                         { value: "English", label: "English" },
                         { value: "日本語", label: "日本語 (Japanese)" },
                         { value: "한국어", label: "한국어 (Korean)" },

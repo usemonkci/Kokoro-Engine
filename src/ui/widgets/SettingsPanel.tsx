@@ -131,6 +131,30 @@ const tabs: { id: SettingsTabId; label: string; icon: typeof Key }[] = [
     { id: "backup", label: "settings.tabs.backup", icon: HardDrive },
 ];
 
+const APP_LANGUAGE_OPTIONS = [
+    { value: "en", label: "English" },
+    { value: "zh", label: "简体中文" },
+    { value: "zh-TW", label: "繁體中文" },
+    { value: "ja", label: "日本語" },
+    { value: "ko", label: "한국어" },
+    { value: "ru", label: "Русский" },
+];
+
+function getAppLanguageSelectValue(language: string | undefined) {
+    const normalized = language?.trim().toLowerCase() ?? "";
+    if (
+        normalized.startsWith("zh-tw") ||
+        normalized.startsWith("zh-hant") ||
+        normalized.startsWith("zh-hk") ||
+        normalized.startsWith("zh-mo")
+    ) {
+        return "zh-TW";
+    }
+
+    const base = normalized.split("-")[0];
+    return APP_LANGUAGE_OPTIONS.some(option => option.value === base) ? base : "en";
+}
+
 function getDefaultTtsVoice(providerId: string, voices: VoiceProfile[]): string {
     if (providerId === "browser") {
         return "";
@@ -802,18 +826,12 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
                                     {t("settings.app_language.label")}
                                 </div>
                                 <Select
-                                    value={i18n.language.split("-")[0]}
+                                    value={getAppLanguageSelectValue(i18n.resolvedLanguage || i18n.language)}
                                     onChange={(v) => {
                                         i18n.changeLanguage(v);
                                         localStorage.setItem("kokoro_app_language", v);
                                     }}
-                                    options={[
-                                        { value: "en", label: "English" },
-                                        { value: "zh", label: "中文" },
-                                        { value: "ja", label: "日本語" },
-                                        { value: "ko", label: "한국어" },
-                                        { value: "ru", label: "Русский" },
-                                    ]}
+                                    options={APP_LANGUAGE_OPTIONS}
                                     className="min-w-[120px]"
                                 />
                             </div>
