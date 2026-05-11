@@ -125,7 +125,7 @@
                 "title": "Context Management",
                 "desc": "Controls how conversation history is retained",
                 "strategy_window": "Rolling Window",
-                "strategy_window_desc": "Keep last 30 messages",
+                "strategy_window_desc": "Keep last 20 messages",
                 "strategy_summary": "Summary Compression",
                 "strategy_summary_desc": "Compress old messages into summaries",
                 "max_chars_label": "Max chars per context message",

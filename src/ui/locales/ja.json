@@ -125,7 +125,7 @@
                 "title": "コンテキスト管理",
                 "desc": "会話履歴の保持方法を制御します",
                 "strategy_window": "ローリングウィンドウ",
-                "strategy_window_desc": "最新30件のメッセージを保持",
+                "strategy_window_desc": "最新20件のメッセージを保持",
                 "strategy_summary": "要約圧縮",
                 "strategy_summary_desc": "古いメッセージを要約に圧縮",
                 "max_chars_label": "コンテキスト内メッセージ最大文字数",

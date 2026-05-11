@@ -125,7 +125,7 @@
                 "title": "컨텍스트 관리",
                 "desc": "대화 기록 보존 방식을 제어합니다",
                 "strategy_window": "롤링 윈도우",
-                "strategy_window_desc": "최근 30개 메시지 유지",
+                "strategy_window_desc": "최근 20개 메시지 유지",
                 "strategy_summary": "요약 압축",
                 "strategy_summary_desc": "오래된 메시지를 요약으로 압축",
                 "max_chars_label": "컨텍스트 메시지당 최대 글자 수",

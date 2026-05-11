@@ -125,7 +125,7 @@
                 "title": "上下文管理",
                 "desc": "控制对话历史的保留方式",
                 "strategy_window": "滚动窗口",
-                "strategy_window_desc": "保留最近 30 条消息",
+                "strategy_window_desc": "保留最近 20 条消息",
                 "strategy_summary": "摘要压缩",
                 "strategy_summary_desc": "压缩旧消息为摘要",
                 "max_chars_label": "上下文单条历史消息最大字符数",
