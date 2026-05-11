@@ -1549,6 +1549,12 @@ const MODEL_AUX_FILES: &[&str] = &[
 ];
 #[cfg(not(test))]
 const MODEL_REF_NAME: &str = "main";
+#[cfg(not(test))]
+const MODEL_PARALLEL_DOWNLOAD_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(not(test))]
+const MODEL_PARALLEL_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(not(test))]
+const MODEL_PARALLEL_DOWNLOADS: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryEmbeddingModelStatus {
@@ -1723,6 +1729,265 @@ fn memory_model_file_path(
 }
 
 #[cfg(not(test))]
+fn memory_model_progress_message(file_name: &str, file_index: usize, file_count: usize) -> String {
+    format!("Downloading {} ({}/{})", file_name, file_index, file_count)
+}
+
+#[cfg(not(test))]
+fn memory_model_tmp_path(target_path: &std::path::Path) -> std::path::PathBuf {
+    target_path.with_extension(format!(
+        "{}download",
+        target_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{}.", extension))
+            .unwrap_or_default()
+    ))
+}
+
+#[cfg(not(test))]
+fn emit_memory_model_progress(
+    emit_progress: &std::sync::Arc<
+        dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
+    >,
+    stage: &str,
+    file_name: &str,
+    file_index: usize,
+    file_count: usize,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+) -> std::result::Result<(), String> {
+    emit_progress(build_download_progress(
+        stage,
+        if stage == "complete" {
+            format!("Finished {} ({}/{})", file_name, file_index, file_count)
+        } else {
+            memory_model_progress_message(file_name, file_index, file_count)
+        },
+        file_name.to_string(),
+        file_index,
+        file_count,
+        downloaded_bytes,
+        total_bytes,
+    ))
+}
+
+#[cfg(not(test))]
+fn content_range_total(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.rsplit('/').next())
+        .and_then(|total| total.parse::<u64>().ok())
+}
+
+#[cfg(not(test))]
+async fn probe_memory_model_file(
+    client: &reqwest::Client,
+    url: &str,
+) -> std::result::Result<(Option<u64>, bool), String> {
+    let response = client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+        .await
+        .map_err(|error| format!("Failed to probe model file: {}", error))?
+        .error_for_status()
+        .map_err(|error| format!("Failed to probe model file: {}", error))?;
+    let status = response.status();
+    let total_bytes = content_range_total(&response).or_else(|| response.content_length());
+    let range_supported =
+        status == reqwest::StatusCode::PARTIAL_CONTENT && content_range_total(&response).is_some();
+    Ok((total_bytes, range_supported))
+}
+
+#[cfg(not(test))]
+async fn download_memory_model_file_single(
+    client: &reqwest::Client,
+    url: &str,
+    tmp_path: &std::path::Path,
+    file_name: &str,
+    file_index: usize,
+    file_count: usize,
+    probed_total_bytes: Option<u64>,
+    emit_progress: &std::sync::Arc<
+        dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
+    >,
+) -> std::result::Result<(), String> {
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("Failed to request {}: {}", file_name, error))?
+        .error_for_status()
+        .map_err(|error| format!("Failed to download {}: {}", file_name, error))?;
+    let total_bytes = response.content_length().or(probed_total_bytes);
+    let mut downloaded_bytes = 0u64;
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(tmp_path)
+        .await
+        .map_err(|error| format!("Failed to create {}: {}", file_name, error))?;
+
+    emit_memory_model_progress(
+        emit_progress,
+        "downloading",
+        file_name,
+        file_index,
+        file_count,
+        downloaded_bytes,
+        total_bytes,
+    )?;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("Failed to read {}: {}", file_name, error))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| format!("Failed to write {}: {}", file_name, error))?;
+        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
+        emit_memory_model_progress(
+            emit_progress,
+            "downloading",
+            file_name,
+            file_index,
+            file_count,
+            downloaded_bytes,
+            total_bytes,
+        )?;
+    }
+
+    file.flush()
+        .await
+        .map_err(|error| format!("Failed to flush {}: {}", file_name, error))?;
+    Ok(())
+}
+
+#[cfg(not(test))]
+async fn download_memory_model_file_parallel(
+    client: &reqwest::Client,
+    url: &str,
+    tmp_path: &std::path::Path,
+    file_name: &str,
+    file_index: usize,
+    file_count: usize,
+    total_bytes: u64,
+    emit_progress: &std::sync::Arc<
+        dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
+    >,
+) -> std::result::Result<(), String> {
+    use futures::{stream, StreamExt, TryStreamExt};
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+    let file = tokio::fs::File::create(tmp_path)
+        .await
+        .map_err(|error| format!("Failed to create {}: {}", file_name, error))?;
+    file.set_len(total_bytes)
+        .await
+        .map_err(|error| format!("Failed to allocate {}: {}", file_name, error))?;
+    drop(file);
+
+    let downloaded_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    emit_memory_model_progress(
+        emit_progress,
+        "downloading",
+        file_name,
+        file_index,
+        file_count,
+        0,
+        Some(total_bytes),
+    )?;
+
+    let chunks: Vec<(u64, u64)> = (0..total_bytes)
+        .step_by(MODEL_PARALLEL_CHUNK_BYTES as usize)
+        .map(|start| {
+            let end = (start + MODEL_PARALLEL_CHUNK_BYTES - 1).min(total_bytes - 1);
+            (start, end)
+        })
+        .collect();
+
+    stream::iter(chunks)
+        .map(|(start, end)| {
+            let client = client.clone();
+            let url = url.to_string();
+            let tmp_path = tmp_path.to_path_buf();
+            let file_name = file_name.to_string();
+            let downloaded_bytes = downloaded_bytes.clone();
+            let emit_progress = emit_progress.clone();
+
+            async move {
+                let response = client
+                    .get(&url)
+                    .header(reqwest::header::RANGE, format!("bytes={}-{}", start, end))
+                    .send()
+                    .await
+                    .map_err(|error| format!("Failed to request {}: {}", file_name, error))?
+                    .error_for_status()
+                    .map_err(|error| format!("Failed to download {}: {}", file_name, error))?;
+
+                if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                    return Err(format!(
+                        "Range download for {} returned {} instead of 206",
+                        file_name,
+                        response.status()
+                    ));
+                }
+
+                let bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|error| format!("Failed to read {}: {}", file_name, error))?;
+                let expected_len = (end - start + 1) as usize;
+                if bytes.len() != expected_len {
+                    return Err(format!(
+                        "Range download for {} returned {} bytes, expected {}",
+                        file_name,
+                        bytes.len(),
+                        expected_len
+                    ));
+                }
+
+                let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&tmp_path)
+                    .await
+                    .map_err(|error| format!("Failed to open {}: {}", file_name, error))?;
+                file.seek(std::io::SeekFrom::Start(start))
+                    .await
+                    .map_err(|error| format!("Failed to seek {}: {}", file_name, error))?;
+                file.write_all(&bytes)
+                    .await
+                    .map_err(|error| format!("Failed to write {}: {}", file_name, error))?;
+                file.flush()
+                    .await
+                    .map_err(|error| format!("Failed to flush {}: {}", file_name, error))?;
+
+                let total_downloaded = downloaded_bytes
+                    .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed)
+                    + bytes.len() as u64;
+                emit_memory_model_progress(
+                    &emit_progress,
+                    "downloading",
+                    &file_name,
+                    file_index,
+                    file_count,
+                    total_downloaded,
+                    Some(total_bytes),
+                )?;
+
+                Ok::<(), String>(())
+            }
+        })
+        .buffer_unordered(MODEL_PARALLEL_DOWNLOADS)
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    Ok(())
+}
+
+#[cfg(not(test))]
 async fn download_memory_model_file(
     client: &reqwest::Client,
     endpoint: &str,
@@ -1734,9 +1999,6 @@ async fn download_memory_model_file(
         dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
     >,
 ) -> std::result::Result<(), String> {
-    use futures::StreamExt;
-    use tokio::io::AsyncWriteExt;
-
     let target_path = memory_model_file_path(snapshot_dir, file_name)?;
     let parent = target_path
         .parent()
@@ -1745,85 +2007,78 @@ async fn download_memory_model_file(
         .await
         .map_err(|error| format!("Failed to create model directory: {}", error))?;
 
-    let tmp_path = target_path.with_extension(format!(
-        "{}download",
-        target_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| format!("{}.", extension))
-            .unwrap_or_default()
-    ));
+    let tmp_path = memory_model_tmp_path(&target_path);
     let url = memory_model_file_url(endpoint, file_name);
-    let message = || format!("Downloading {} ({}/{})", file_name, file_index, file_count);
 
-    emit_progress(build_download_progress(
-        "downloading",
-        message(),
-        file_name.to_string(),
-        file_index,
-        file_count,
-        0,
-        None,
-    ))?;
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|error| format!("Failed to request {}: {}", file_name, error))?
-        .error_for_status()
-        .map_err(|error| format!("Failed to download {}: {}", file_name, error))?;
-    let total_bytes = response.content_length();
-    let mut downloaded_bytes = 0u64;
-    let mut stream = response.bytes_stream();
-    let mut file = tokio::fs::File::create(&tmp_path)
-        .await
-        .map_err(|error| format!("Failed to create {}: {}", file_name, error))?;
-
-    emit_progress(build_download_progress(
-        "downloading",
-        message(),
-        file_name.to_string(),
-        file_index,
-        file_count,
-        downloaded_bytes,
-        total_bytes,
-    ))?;
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("Failed to read {}: {}", file_name, error))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|error| format!("Failed to write {}: {}", file_name, error))?;
-        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
-        emit_progress(build_download_progress(
-            "downloading",
-            message(),
-            file_name.to_string(),
+    let (total_bytes, range_supported) = probe_memory_model_file(client, &url).await?;
+    if range_supported
+        && total_bytes
+            .map(|bytes| bytes >= MODEL_PARALLEL_DOWNLOAD_THRESHOLD_BYTES)
+            .unwrap_or(false)
+    {
+        if let Err(error) = download_memory_model_file_parallel(
+            client,
+            &url,
+            &tmp_path,
+            file_name,
             file_index,
             file_count,
-            downloaded_bytes,
+            total_bytes.unwrap(),
+            emit_progress,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "memory",
+                "[Memory] Parallel download failed for {}, falling back to single stream: {}",
+                file_name,
+                error
+            );
+            download_memory_model_file_single(
+                client,
+                &url,
+                &tmp_path,
+                file_name,
+                file_index,
+                file_count,
+                total_bytes,
+                emit_progress,
+            )
+            .await?;
+        }
+    } else {
+        download_memory_model_file_single(
+            client,
+            &url,
+            &tmp_path,
+            file_name,
+            file_index,
+            file_count,
             total_bytes,
-        ))?;
+            emit_progress,
+        )
+        .await?;
     }
 
-    file.flush()
+    let downloaded_bytes = tokio::fs::metadata(&tmp_path)
         .await
-        .map_err(|error| format!("Failed to flush {}: {}", file_name, error))?;
-    drop(file);
+        .map(|metadata| metadata.len())
+        .unwrap_or_else(|_| total_bytes.unwrap_or(0));
+    let final_total_bytes = total_bytes.or(Some(downloaded_bytes));
+
     tokio::fs::rename(&tmp_path, &target_path)
         .await
         .map_err(|error| format!("Failed to finalize {}: {}", file_name, error))?;
 
-    emit_progress(build_download_progress(
+    emit_memory_model_progress(
+        emit_progress,
         "complete",
-        format!("Finished {} ({}/{})", file_name, file_index, file_count),
-        file_name.to_string(),
+        file_name,
         file_index,
         file_count,
-        total_bytes.unwrap_or(downloaded_bytes),
-        total_bytes,
-    ))?;
+        downloaded_bytes,
+        final_total_bytes,
+    )?;
 
     Ok(())
 }
