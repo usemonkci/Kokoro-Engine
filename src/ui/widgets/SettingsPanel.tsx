@@ -40,7 +40,7 @@ import type {
     SingingProgressEvent,
     CharacterRecord,
 } from "../../lib/kokoro-bridge";
-import type { BackgroundConfig } from "../hooks/useBackgroundSlideshow";
+import { normalizeBackgroundConfigForImageCount, type BackgroundConfig } from "../hooks/useBackgroundSlideshow";
 import type { Live2DDisplayMode } from "../../features/live2d/Live2DViewer";
 
 export type SettingsTabId = "api" | "persona" | "tts" | "stt" | "sing" | "mods" | "bg" | "model" | "imagegen" | "memory" | "vision" | "mcp" | "telegram" | "jailbreak" | "backup" | "pet";
@@ -259,6 +259,7 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
     const bg = backgroundControls;
     const overlayRef = useRef<HTMLDivElement>(null);
     const latestLlmConfigRef = useRef<LlmConfig | null>(llmConfigProp ?? null);
+    const bgConfigDirtyRef = useRef(false);
 
     // ── Local Buffer State ───────────────────────────────
     // We hold changes locally until "Save" is clicked.
@@ -269,7 +270,9 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
     const [localGazeTracking, setLocalGazeTracking] = useState(gazeTrackingProp ?? true);
 
     // Background Config
-    const [localBgConfig, setLocalBgConfig] = useState<BackgroundConfig>({ ...bg.config });
+    const [localBgConfig, setLocalBgConfig] = useState<BackgroundConfig>(() => ({
+        ...normalizeBackgroundConfigForImageCount(bg.config, bg.imageCount),
+    }));
 
     // Sync local state only when the panel opens; while editing, keep local form state authoritative.
     useEffect(() => {
@@ -278,7 +281,8 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
             setLocalCustomModelPath(customModelPath);
             latestLlmConfigRef.current = llmConfigProp ?? null;
             setLocalGazeTracking(gazeTrackingProp ?? true);
-            setLocalBgConfig({ ...bg.config });
+            bgConfigDirtyRef.current = false;
+            setLocalBgConfig({ ...normalizeBackgroundConfigForImageCount(bg.config, bg.imageCount) });
             setPersonaText(localStorage.getItem("kokoro_persona") || "You are a friendly, warm companion character. Respond with personality and emotion.");
             setTtsVoice(localStorage.getItem("kokoro_tts_voice") || "");
             setTtsSpeed(localStorage.getItem("kokoro_tts_speed") || "1.0");
@@ -293,6 +297,11 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
             fetchData();
         }
     }, [isOpen, telegramConfigProp]);
+
+    useEffect(() => {
+        if (!isOpen || bgConfigDirtyRef.current) return;
+        setLocalBgConfig({ ...normalizeBackgroundConfigForImageCount(bg.config, bg.imageCount) });
+    }, [isOpen, bg.config, bg.imageCount]);
 
     const [mountedTabs, setMountedTabs] = useState<Set<SettingsTabId>>(() => new Set([activeTab]));
 
@@ -324,6 +333,7 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
 
     // Update local BG config helper
     const updateBgConfig = (update: Partial<BackgroundConfig>) => {
+        bgConfigDirtyRef.current = true;
         setLocalBgConfig(prev => ({ ...prev, ...update }));
     };
 
@@ -479,6 +489,7 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
 
         // Commit background config
         bg.setConfig(localBgConfig);
+        bgConfigDirtyRef.current = false;
 
         showSaveFeedback();
 

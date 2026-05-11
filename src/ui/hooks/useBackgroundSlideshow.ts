@@ -13,23 +13,31 @@ export interface BackgroundConfig {
     mode: BackgroundMode;
 }
 
-const DEFAULT_CONFIG: BackgroundConfig = {
+export const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
     enabled: true,
     blur: false,
     blurAmount: 8,
     interval: 30,
     rotation: "sequential",
-    mode: "slideshow",
+    mode: "static",
 };
 
 const DEFAULT_BACKGROUND_URL = "/backgrounds/default-cozy-room.png";
 
+export function normalizeBackgroundConfigForImageCount(config: BackgroundConfig, imageCount: number): BackgroundConfig {
+    if (imageCount === 0 && config.mode === "slideshow") {
+        return { ...config, mode: "static" };
+    }
+
+    return config;
+}
+
 function loadConfig(): BackgroundConfig {
     try {
         const raw = localStorage.getItem("kokoro_bg_config");
-        if (raw) return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+        if (raw) return { ...DEFAULT_BACKGROUND_CONFIG, ...JSON.parse(raw) };
     } catch { /* ignore */ }
-    return DEFAULT_CONFIG;
+    return { ...DEFAULT_BACKGROUND_CONFIG };
 }
 
 function saveConfig(config: BackgroundConfig) {
@@ -39,6 +47,7 @@ function saveConfig(config: BackgroundConfig) {
 export function useBackgroundSlideshow() {
     const [config, setConfigState] = useState<BackgroundConfig>(loadConfig);
     const [storedImages, setStoredImages] = useState<{ id: number, url: string }[]>([]);
+    const [imagesLoaded, setImagesLoaded] = useState(false);
 
     // Derived URL string array for consumption
     const images = useMemo(() => storedImages.map(img => img.url), [storedImages]);
@@ -62,8 +71,27 @@ export function useBackgroundSlideshow() {
                     url: URL.createObjectURL(item.blob)
                 }));
                 setStoredImages(loaded);
+                setImagesLoaded(true);
+
+                if (loaded.length === 0) {
+                    setConfigState(prev => {
+                        const next = normalizeBackgroundConfigForImageCount(prev, 0);
+                        if (next === prev) return prev;
+                        saveConfig(next);
+                        return next;
+                    });
+                }
             } catch (error) {
                 console.error("Failed to load background images:", error);
+                if (active) {
+                    setImagesLoaded(true);
+                    setConfigState(prev => {
+                        const next = normalizeBackgroundConfigForImageCount(prev, 0);
+                        if (next === prev) return prev;
+                        saveConfig(next);
+                        return next;
+                    });
+                }
             }
         }
 
@@ -77,11 +105,14 @@ export function useBackgroundSlideshow() {
     // Persist config changes
     const setConfig = useCallback((update: Partial<BackgroundConfig>) => {
         setConfigState(prev => {
-            const next = { ...prev, ...update };
+            const merged = { ...prev, ...update };
+            const next = imagesLoaded
+                ? normalizeBackgroundConfigForImageCount(merged, storedImages.length)
+                : merged;
             saveConfig(next);
             return next;
         });
-    }, []);
+    }, [imagesLoaded, storedImages.length]);
 
     // Import files from <input type="file">
     const importFiles = useCallback(async (fileList: FileList) => {
@@ -125,6 +156,14 @@ export function useBackgroundSlideshow() {
             URL.revokeObjectURL(item.url);
 
             setStoredImages(prev => prev.filter((_, i) => i !== index));
+            if (storedImages.length <= 1) {
+                setConfigState(prev => {
+                    const next = normalizeBackgroundConfigForImageCount(prev, 0);
+                    if (next === prev) return prev;
+                    saveConfig(next);
+                    return next;
+                });
+            }
         } catch (e) {
             console.error("Failed to delete image:", e);
         }
@@ -138,6 +177,12 @@ export function useBackgroundSlideshow() {
             setStoredImages([]);
             setCurrentIndex(0);
             setCurrentUrl(null);
+            setConfigState(prev => {
+                const next = normalizeBackgroundConfigForImageCount(prev, 0);
+                if (next === prev) return prev;
+                saveConfig(next);
+                return next;
+            });
         } catch (e) {
             console.error("Failed to clear images:", e);
         }
