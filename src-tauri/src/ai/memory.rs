@@ -1690,129 +1690,142 @@ pub fn memory_embedding_model_status() -> MemoryEmbeddingModelStatus {
 }
 
 #[cfg(not(test))]
-#[derive(Clone)]
-struct MemoryModelProgressReporter {
-    emit_progress: std::sync::Arc<
-        dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
-    >,
+fn memory_model_endpoint() -> String {
+    std::env::var("HF_ENDPOINT")
+        .unwrap_or_else(|_| "https://huggingface.co".to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+#[cfg(not(test))]
+fn memory_model_file_url(endpoint: &str, file_name: &str) -> String {
+    format!(
+        "{}/{}/resolve/{}/{}",
+        endpoint, MODEL_REPO, MODEL_REF_NAME, file_name
+    )
+}
+
+#[cfg(not(test))]
+fn memory_model_file_path(
+    snapshot_dir: &std::path::Path,
+    file_name: &str,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(file_name);
+    if path.components().any(|component| {
+        !matches!(
+            component,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    }) {
+        return Err(format!("Invalid model file path: {}", file_name));
+    }
+    Ok(snapshot_dir.join(path))
+}
+
+#[cfg(not(test))]
+async fn download_memory_model_file(
+    client: &reqwest::Client,
+    endpoint: &str,
+    snapshot_dir: &std::path::Path,
+    file_name: &str,
     file_index: usize,
     file_count: usize,
-    state: std::sync::Arc<std::sync::Mutex<MemoryModelProgressState>>,
-}
+    emit_progress: &std::sync::Arc<
+        dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
+    >,
+) -> std::result::Result<(), String> {
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
 
-#[cfg(not(test))]
-#[derive(Debug, Default)]
-struct MemoryModelProgressState {
-    file_name: String,
-    downloaded_bytes: u64,
-    total_bytes: Option<u64>,
-}
+    let target_path = memory_model_file_path(snapshot_dir, file_name)?;
+    let parent = target_path
+        .parent()
+        .ok_or_else(|| format!("Invalid model file path: {}", file_name))?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| format!("Failed to create model directory: {}", error))?;
 
-#[cfg(not(test))]
-impl MemoryModelProgressReporter {
-    fn new(
-        emit_progress: std::sync::Arc<
-            dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
-        >,
-        file_name: String,
-        file_index: usize,
-        file_count: usize,
-    ) -> Self {
-        Self {
-            emit_progress,
+    let tmp_path = target_path.with_extension(format!(
+        "{}download",
+        target_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{}.", extension))
+            .unwrap_or_default()
+    ));
+    let url = memory_model_file_url(endpoint, file_name);
+    let message = || format!("Downloading {} ({}/{})", file_name, file_index, file_count);
+
+    emit_progress(build_download_progress(
+        "downloading",
+        message(),
+        file_name.to_string(),
+        file_index,
+        file_count,
+        0,
+        None,
+    ))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|error| format!("Failed to request {}: {}", file_name, error))?
+        .error_for_status()
+        .map_err(|error| format!("Failed to download {}: {}", file_name, error))?;
+    let total_bytes = response.content_length();
+    let mut downloaded_bytes = 0u64;
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(&tmp_path)
+        .await
+        .map_err(|error| format!("Failed to create {}: {}", file_name, error))?;
+
+    emit_progress(build_download_progress(
+        "downloading",
+        message(),
+        file_name.to_string(),
+        file_index,
+        file_count,
+        downloaded_bytes,
+        total_bytes,
+    ))?;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("Failed to read {}: {}", file_name, error))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| format!("Failed to write {}: {}", file_name, error))?;
+        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
+        emit_progress(build_download_progress(
+            "downloading",
+            message(),
+            file_name.to_string(),
             file_index,
             file_count,
-            state: std::sync::Arc::new(std::sync::Mutex::new(MemoryModelProgressState {
-                file_name,
-                downloaded_bytes: 0,
-                total_bytes: None,
-            })),
-        }
+            downloaded_bytes,
+            total_bytes,
+        ))?;
     }
 
-    fn emit(&self, stage: &str, message: String) {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let progress = build_download_progress(
-            stage,
-            message,
-            state.file_name.clone(),
-            self.file_index,
-            self.file_count,
-            state.downloaded_bytes,
-            state.total_bytes,
-        );
-        drop(state);
-        if let Err(error) = (self.emit_progress)(progress) {
-            tracing::warn!(
-                target: "memory",
-                "[Memory] Failed to emit download progress: {}",
-                error
-            );
-        }
-    }
-}
+    file.flush()
+        .await
+        .map_err(|error| format!("Failed to flush {}: {}", file_name, error))?;
+    drop(file);
+    tokio::fs::rename(&tmp_path, &target_path)
+        .await
+        .map_err(|error| format!("Failed to finalize {}: {}", file_name, error))?;
 
-#[cfg(not(test))]
-impl hf_hub::api::tokio::Progress for MemoryModelProgressReporter {
-    async fn init(&mut self, size: usize, filename: &str) {
-        {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.file_name = filename.to_string();
-            state.downloaded_bytes = 0;
-            state.total_bytes = Some(size as u64);
-        }
-        self.emit(
-            "downloading",
-            format!(
-                "Downloading {} ({}/{})",
-                filename, self.file_index, self.file_count
-            ),
-        );
-    }
+    emit_progress(build_download_progress(
+        "complete",
+        format!("Finished {} ({}/{})", file_name, file_index, file_count),
+        file_name.to_string(),
+        file_index,
+        file_count,
+        total_bytes.unwrap_or(downloaded_bytes),
+        total_bytes,
+    ))?;
 
-    async fn update(&mut self, size: usize) {
-        let file_name = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.downloaded_bytes = state.downloaded_bytes.saturating_add(size as u64);
-            state.file_name.clone()
-        };
-        self.emit(
-            "downloading",
-            format!(
-                "Downloading {} ({}/{})",
-                file_name, self.file_index, self.file_count
-            ),
-        );
-    }
-
-    async fn finish(&mut self) {
-        let file_name = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some(total_bytes) = state.total_bytes {
-                state.downloaded_bytes = total_bytes;
-            }
-            state.file_name.clone()
-        };
-        self.emit(
-            "complete",
-            format!(
-                "Finished {} ({}/{})",
-                file_name, self.file_index, self.file_count
-            ),
-        );
-    }
+    Ok(())
 }
 
 #[cfg(not(test))]
@@ -1841,7 +1854,9 @@ where
     let snapshot_dir = default_model_snapshot_dir();
     let missing_files = missing_required_model_files(&snapshot_dir);
     let file_count = missing_files.len();
-    let emit_progress = std::sync::Arc::new(emit_progress);
+    let emit_progress: std::sync::Arc<
+        dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
+    > = std::sync::Arc::new(emit_progress);
 
     emit_progress(build_download_progress(
         "checking",
@@ -1853,26 +1868,23 @@ where
         None,
     ))?;
 
-    let endpoint =
-        std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_string());
-    let api = hf_hub::api::tokio::ApiBuilder::new()
-        .with_cache_dir(default_model_cache_dir())
-        .with_endpoint(endpoint)
-        .with_progress(false)
+    let endpoint = memory_model_endpoint();
+    let client = reqwest::Client::builder()
+        .user_agent("kokoro-engine/0.2.7")
         .build()
-        .map_err(|error| format!("Failed to initialize HuggingFace downloader: {}", error))?;
-    let repo = api.model(MODEL_REPO.to_string());
+        .map_err(|error| format!("Failed to initialize model downloader: {}", error))?;
 
     for (index, file_name) in missing_files.iter().enumerate() {
-        let reporter = MemoryModelProgressReporter::new(
-            emit_progress.clone(),
-            file_name.clone(),
+        download_memory_model_file(
+            &client,
+            &endpoint,
+            &snapshot_dir,
+            file_name,
             index + 1,
             file_count,
-        );
-        repo.download_with_progress(file_name, reporter)
-            .await
-            .map_err(|error| format!("Failed to download {}: {}", file_name, error))?;
+            &emit_progress,
+        )
+        .await?;
     }
 
     emit_progress(build_download_progress(
