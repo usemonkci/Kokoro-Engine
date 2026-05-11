@@ -128,8 +128,8 @@
                 "strategy_window_desc": "Keep last 30 messages",
                 "strategy_summary": "Summary Compression",
                 "strategy_summary_desc": "Compress old messages into summaries",
-                "max_chars_label": "Max chars per message",
-                "max_chars_hint": "Messages exceeding this length will be truncated. Applies to both strategies."
+                "max_chars_label": "Max chars per context message",
+                "max_chars_hint": "Limits each history message stored in chat context, including user messages and assistant replies. It does not cap the current model response length."
             },
             "emotion": {
                 "label": "Emotion System",

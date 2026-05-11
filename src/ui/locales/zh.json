@@ -128,8 +128,8 @@
                 "strategy_window_desc": "保留最近 30 条消息",
                 "strategy_summary": "摘要压缩",
                 "strategy_summary_desc": "压缩旧消息为摘要",
-                "max_chars_label": "单条消息最大字符数",
-                "max_chars_hint": "超出长度的消息将被截断，两种策略均生效"
+                "max_chars_label": "上下文单条历史消息最大字符数",
+                "max_chars_hint": "限制写入对话上下文的单条历史消息长度（包含用户消息和助手回复），不限制本次模型回复的生成长度。"
             },
             "emotion": {
                 "label": "情绪系统",

@@ -2387,23 +2387,15 @@ pub async fn stream_chat(
             }
         }
 
-        // Add to in-memory history only (DB already persisted)
-        {
-            let max_chars = *state.max_message_chars.lock().await;
-            let content = if full_response.chars().count() > max_chars {
-                let truncated: String = full_response.chars().take(max_chars).collect();
-                format!("{}…[truncated]", truncated)
-            } else {
-                full_response.clone()
-            };
-            state
-                .push_history_message(Message {
-                    role: "assistant".to_string(),
-                    content,
-                    metadata: Some(metadata_value),
-                })
-                .await;
-        }
+        // Add to in-memory history only (DB already persisted).
+        // push_history_message applies the context message length limit.
+        state
+            .push_history_message(Message {
+                role: "assistant".to_string(),
+                content: full_response.clone(),
+                metadata: Some(metadata_value),
+            })
+            .await;
     }
 
     // Event-driven + periodic memory extraction

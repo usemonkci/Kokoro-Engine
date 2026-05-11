@@ -34,6 +34,17 @@ pub struct MemorySnippet {
     pub tier: String,
 }
 
+const TRUNCATION_MARKER: &str = "…[truncated]";
+
+fn truncate_message_content(content: String, max_chars: usize) -> String {
+    if content.chars().count() > max_chars {
+        let truncated: String = content.chars().take(max_chars).collect();
+        format!("{truncated}{TRUNCATION_MARKER}")
+    } else {
+        content
+    }
+}
+
 fn normalized_language_name(language: &str) -> Option<&str> {
     let trimmed = language.trim();
     (!trimmed.is_empty()).then_some(trimmed)
@@ -266,14 +277,9 @@ impl AIOrchestrator {
             }
         }
 
-        // Truncate single message if too long
+        // Truncate single message before it enters persisted conversation history.
         let max_chars = *self.max_message_chars.lock().await;
-        let content = if content.chars().count() > max_chars {
-            let truncated: String = content.chars().take(max_chars).collect();
-            format!("{}…[truncated]", truncated)
-        } else {
-            content
-        };
+        let content = truncate_message_content(content, max_chars);
 
         // Persist to database FIRST so no code path can skip it
         let _ = self
@@ -603,7 +609,10 @@ impl AIOrchestrator {
 
     /// Append a message to in-memory history only and keep the memory boundary aligned
     /// with the rolling window behavior used by assistant streaming responses.
-    pub async fn push_history_message(&self, message: Message) {
+    pub async fn push_history_message(&self, mut message: Message) {
+        let max_chars = *self.max_message_chars.lock().await;
+        message.content = truncate_message_content(message.content, max_chars);
+
         let mut history = self.history.lock().await;
         history.push_back(message);
         let evicted = if history.len() > 20 {
@@ -1385,6 +1394,36 @@ mod tests {
         assert!(
             history.len() <= 20,
             "History should not exceed 20 messages after push_history_message"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_push_history_message_truncation() {
+        let orchestrator = setup_test_orchestrator().await;
+        *orchestrator.max_message_chars.lock().await = 50;
+
+        let long_message =
+            "This assistant response is long enough to exceed the configured context limit"
+                .to_string();
+        orchestrator
+            .push_history_message(Message {
+                role: "assistant".to_string(),
+                content: long_message,
+                metadata: None,
+            })
+            .await;
+
+        let history = orchestrator.history.lock().await;
+        assert_eq!(history.len(), 1, "History should contain one message");
+
+        let msg = &history[0];
+        assert!(
+            msg.content.ends_with(TRUNCATION_MARKER),
+            "Message should end with truncation marker"
+        );
+        assert!(
+            msg.content.chars().count() <= 50 + TRUNCATION_MARKER.chars().count(),
+            "Truncated message should not exceed max + marker length"
         );
     }
 

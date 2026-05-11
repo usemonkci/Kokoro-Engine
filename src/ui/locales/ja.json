@@ -128,8 +128,8 @@
                 "strategy_window_desc": "最新30件のメッセージを保持",
                 "strategy_summary": "要約圧縮",
                 "strategy_summary_desc": "古いメッセージを要約に圧縮",
-                "max_chars_label": "メッセージ最大文字数",
-                "max_chars_hint": "この長さを超えるメッセージは切り捨てられます。両方の戦略に適用されます。"
+                "max_chars_label": "コンテキスト内メッセージ最大文字数",
+                "max_chars_hint": "会話コンテキストに保存される各履歴メッセージ（ユーザー入力とアシスタント応答）をこの長さで切り捨てます。現在のモデル応答の生成上限ではありません。"
             },
             "emotion": {
                 "label": "感情システム",
