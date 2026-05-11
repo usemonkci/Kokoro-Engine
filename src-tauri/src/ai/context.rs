@@ -24,6 +24,24 @@ pub struct Message {
     pub metadata: Option<serde_json::Value>,
 }
 
+pub fn is_vision_context_message(message: &Message) -> bool {
+    message.role == "context"
+        || message
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("type"))
+            .and_then(|value| value.as_str())
+            == Some("vision_observation")
+}
+
+pub fn is_memory_candidate_message(message: &Message) -> bool {
+    !is_vision_context_message(message)
+}
+
+pub fn is_summary_candidate_message(message: &Message) -> bool {
+    !is_vision_context_message(message)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemorySnippet {
     pub id: i64,
@@ -443,12 +461,31 @@ impl AIOrchestrator {
         .execute(&self.db)
         .await?;
 
-        // 更新对话的 updated_at
-        sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+        // 更新对话的 updated_at。If a hidden/context row created the
+        // conversation first, let the first visible user turn restore the
+        // normal user-derived title.
+        if role == "user" {
+            let chars: Vec<char> = content.chars().collect();
+            let title = if chars.len() > 20 {
+                format!("{}...", chars[..20].iter().collect::<String>())
+            } else {
+                content.to_string()
+            };
+            sqlx::query(
+                "UPDATE conversations SET title = CASE WHEN title = '新对话' THEN ? ELSE title END, updated_at = ? WHERE id = ?"
+            )
+            .bind(&title)
             .bind(&now)
             .bind(&conv_id)
             .execute(&self.db)
             .await?;
+        } else {
+            sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+                .bind(&now)
+                .bind(&conv_id)
+                .execute(&self.db)
+                .await?;
+        }
 
         Ok(())
     }
@@ -557,6 +594,14 @@ impl AIOrchestrator {
         Ok(())
     }
 
+    pub async fn delete_message_by_id(&self, row_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM conversation_messages WHERE id = ?")
+            .bind(row_id)
+            .execute(&self.db)
+            .await?;
+        Ok(())
+    }
+
     /// Returns the total count of user messages in this session.
     pub async fn get_message_count(&self) -> u64 {
         *self.message_count.lock().await
@@ -569,21 +614,27 @@ impl AIOrchestrator {
     /// Returns the last `n` messages from history for memory extraction.
     pub async fn get_recent_history(&self, n: usize) -> Vec<Message> {
         let history = self.history.lock().await;
-        let start = if history.len() > n {
-            history.len() - n
-        } else {
-            0
-        };
-        history.iter().skip(start).cloned().collect()
+        let filtered = history
+            .iter()
+            .filter(|message| is_summary_candidate_message(message))
+            .cloned()
+            .collect::<Vec<_>>();
+        let start = filtered.len().saturating_sub(n);
+        filtered.into_iter().skip(start).collect()
     }
 
     /// Returns the last `n` messages after the current memory boundary.
     pub async fn get_recent_memory_history(&self, n: usize) -> Vec<Message> {
         let history = self.history.lock().await;
         let boundary = (*self.memory_history_boundary.lock().await).min(history.len());
-        let visible_len = history.len().saturating_sub(boundary);
-        let start = boundary + visible_len.saturating_sub(n);
-        history.iter().skip(start).cloned().collect()
+        let filtered = history
+            .iter()
+            .skip(boundary)
+            .filter(|message| is_memory_candidate_message(message))
+            .cloned()
+            .collect::<Vec<_>>();
+        let start = filtered.len().saturating_sub(n);
+        filtered.into_iter().skip(start).collect()
     }
 
     pub fn is_memory_enabled(&self) -> bool {
@@ -705,7 +756,10 @@ impl AIOrchestrator {
                     .as_ref()
                     .and_then(|meta| meta.get("type"))
                     .and_then(|value| value.as_str());
-                !matches!(technical_type, Some("translation_instruction"))
+                !matches!(
+                    technical_type,
+                    Some("translation_instruction") | Some("vision_observation")
+                ) && msg.role != "context"
             })
             .cloned()
             .collect();
@@ -1120,6 +1174,33 @@ mod tests {
             .all(|message| !message.content.contains("<long_term_memory>")
                 && !message.content.contains("<conversation_state>")
                 && !message.content.contains("<conversation_summary>")));
+    }
+
+    #[tokio::test]
+    async fn recent_history_helpers_skip_vision_context_rows() {
+        let orchestrator = setup_test_orchestrator().await;
+        orchestrator
+            .push_history_message(Message {
+                role: "context".to_string(),
+                content: "Raw screen summary".to_string(),
+                metadata: Some(serde_json::json!({"type": "vision_observation"})),
+            })
+            .await;
+        orchestrator
+            .push_history_message(Message {
+                role: "user".to_string(),
+                content: "Please explain this code".to_string(),
+                metadata: None,
+            })
+            .await;
+
+        let summary_history = orchestrator.get_recent_history(10).await;
+        let memory_history = orchestrator.get_recent_memory_history(10).await;
+
+        assert_eq!(summary_history.len(), 1);
+        assert_eq!(summary_history[0].role, "user");
+        assert_eq!(memory_history.len(), 1);
+        assert_eq!(memory_history[0].role, "user");
     }
 
     #[tokio::test]

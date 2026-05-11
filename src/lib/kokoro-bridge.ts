@@ -260,7 +260,7 @@ export interface ChatRequest {
     allow_image_gen?: boolean;
     images?: string[];
     character_id?: string;
-    /** If true, neither user message nor response is saved to chat history */
+    /** If true, the user instruction is hidden; non-empty assistant replies may still be saved. */
     hidden?: boolean;
 }
 
@@ -786,10 +786,18 @@ export async function uploadVisionImage(fileBytes: number[], filename: string): 
 // ── Vision Config & Watcher ────────────────────────
 
 export interface VisionConfig {
-    enabled: boolean;
-    interval_secs: number;
+    vlm_enabled: boolean;
+    auto_vision_enabled: boolean;
+    capture_interval_secs: number;
     change_threshold: number;
-    proactive_enabled: boolean;
+    display_id?: string | null;
+    vlm_region?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } | null;
+    proactive_vision_enabled: boolean;
     vlm_provider: string;
     vlm_base_url: string | null;
     vlm_model: string;
@@ -798,8 +806,23 @@ export interface VisionConfig {
     camera_device_id: string | null;
 }
 
+export interface VisionScreenInfo {
+    display_id: string;
+    label: string;
+    is_primary: boolean;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scale_factor: number;
+}
+
 export async function getVisionConfig(): Promise<VisionConfig> {
     return invoke<VisionConfig>("get_vision_config");
+}
+
+export async function listVisionScreens(): Promise<VisionScreenInfo[]> {
+    return invoke<VisionScreenInfo[]>("list_vision_screens");
 }
 
 export async function saveVisionConfig(config: VisionConfig): Promise<void> {

@@ -13,16 +13,19 @@ import { ChatMessage } from "./ChatMessage";
 import { buildChatMessagesFromConversation } from "./chat-history";
 import { getStreamingRevealText, hasActiveKokoroBubble, hasVisibleAssistantContent, shouldRenderTypingIndicator, shouldRevealLiveTurnToolTrace } from "./chat-streaming-state";
 import { requestMemoryModelDialog } from "../../lib/memory-model-gate";
+import { audioPlayer } from "../../core/services";
 
 // ── Types ──────────────────────────────────────────────────
 interface ChatMessage {
-    role: "user" | "kokoro" | "tool";
+    role: "user" | "kokoro" | "tool" | "context";
     text: string;
     images?: string[];
     translation?: string;
     translationPending?: boolean;
     isError?: boolean;
     tools?: ToolTraceItem[];
+    capturedAt?: string;
+    source?: string;
 }
 
 interface PendingTurnState {
@@ -655,6 +658,7 @@ export default function ChatPanel() {
     const isStreamingRef = useRef(false);
     const [isBusy, setIsBusy] = useState(false);
     const isBusyRef = useRef(false);
+    const ttsSpeakingRef = useRef(false);
     const [isStopping, setIsStopping] = useState(false);
     const cancelRequestedRef = useRef(false);
     const messagesRef = useRef<ChatMessage[]>([]);
@@ -1119,7 +1123,7 @@ export default function ChatPanel() {
                     const hasContent = hasVisibleAssistantContent(cleanText) || turn.tools.length > 0;
 
                     if (hasActiveKokoroBubble(prev, turn.messageIndex)) {
-                        if (!hasContent && (status === "error" || status === "cancelled")) {
+                        if (!hasContent) {
                             return [...prev.slice(0, turn.messageIndex!), ...prev.slice(turn.messageIndex! + 1)];
                         }
 
@@ -1197,6 +1201,20 @@ export default function ChatPanel() {
             if (aborted) { unToolResult(); return; }
             cleanups.push(unToolResult);
 
+            const unTtsStart = await listen("tts:start", () => {
+                if (aborted) return;
+                ttsSpeakingRef.current = true;
+            });
+            if (aborted) { unTtsStart(); return; }
+            cleanups.push(unTtsStart);
+
+            const unTtsEnd = await listen("tts:end", () => {
+                if (aborted) return;
+                ttsSpeakingRef.current = false;
+            });
+            if (aborted) { unTtsEnd(); return; }
+            cleanups.push(unTtsEnd);
+
             // Telegram chat sync — show messages from Telegram bot in desktop UI
             const unTelegramSync = await onTelegramChatSync((data) => {
                 if (aborted) return;
@@ -1214,7 +1232,9 @@ export default function ChatPanel() {
 
             // Listen for proactive triggers from backend (heartbeat)
             const unProactive = await listen<any>("proactive-trigger", (event) => {
-                if (aborted || isBusyRef.current) return;
+                const browserSpeaking = typeof window !== "undefined"
+                    && Boolean(window.speechSynthesis?.speaking);
+                if (aborted || isBusyRef.current || ttsSpeakingRef.current || audioPlayer.isPlaying || browserSpeaking) return;
                 void (async () => {
                     if (!await ensureMemoryModelReady({ silent: true })) {
                         return;

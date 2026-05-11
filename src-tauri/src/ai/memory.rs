@@ -2980,7 +2980,11 @@ impl MemoryManager {
                 Some("assistant_tool_calls")
                     | Some("tool_result")
                     | Some("translation_instruction")
+                    | Some("vision_observation")
             ) {
+                continue;
+            }
+            if row.get::<String, _>("role") == "context" {
                 continue;
             }
 

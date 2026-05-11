@@ -11,6 +11,33 @@ use async_openai::types::chat::{
 
 use crate::llm::provider::LlmChatMessage;
 
+pub fn is_vision_context_metadata(metadata: Option<&serde_json::Value>) -> bool {
+    metadata
+        .and_then(|meta| meta.get("type"))
+        .and_then(|value| value.as_str())
+        == Some("vision_observation")
+}
+
+pub fn render_vision_context_user_message(
+    content: impl AsRef<str>,
+    metadata: Option<&serde_json::Value>,
+) -> ChatCompletionRequestMessage {
+    let source = metadata
+        .and_then(|meta| meta.get("source"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let captured_at = metadata
+        .and_then(|meta| meta.get("captured_at"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    user_text_message(format!(
+        "[Screen context, not typed by the user]\nCaptured at: {}\nSource: {}\nSummary: {}",
+        captured_at,
+        source,
+        content.as_ref()
+    ))
+}
+
 pub fn role_text_message(
     role: &str,
     text: impl Into<String>,
@@ -30,6 +57,10 @@ pub fn history_message_to_chat_message(
     metadata: Option<&serde_json::Value>,
 ) -> Result<ChatCompletionRequestMessage, String> {
     let content = content.into();
+
+    if role == "context" && is_vision_context_metadata(metadata) {
+        return Ok(render_vision_context_user_message(content, metadata));
+    }
 
     if role == "tool" {
         let tool_call_id = metadata
@@ -277,6 +308,30 @@ mod tests {
             Some("private model reasoning token stream")
         );
         assert_eq!(extract_message_text(&message.message), "visible answer");
+    }
+
+    #[test]
+    fn vision_context_history_renders_as_user_message() {
+        let metadata = serde_json::json!({
+            "type": "vision_observation",
+            "captured_at": "2026-05-11T06:00:00Z",
+            "source": "auto",
+        });
+
+        let message =
+            history_message_to_chat_message("context", "VS Code is visible", Some(&metadata))
+                .expect("vision context should convert");
+
+        match message {
+            ChatCompletionRequestMessage::User(_) => {
+                let text = extract_message_text(&message);
+                assert!(text.contains("[Screen context, not typed by the user]"));
+                assert!(text.contains("Captured at: 2026-05-11T06:00:00Z"));
+                assert!(text.contains("Source: auto"));
+                assert!(text.contains("VS Code is visible"));
+            }
+            other => panic!("expected user-rendered context, got {other:?}"),
+        }
     }
 }
 

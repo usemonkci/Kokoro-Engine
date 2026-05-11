@@ -747,6 +747,16 @@
                 "complete": "Complete!"
             },
             "api_key": "API Key",
+            "display": {
+                "label": "Screen to capture",
+                "auto": "Auto / primary screen",
+                "auto_desc": "Use the primary screen when available, otherwise the first available screen.",
+                "primary": "Primary",
+                "missing": "Previously selected screen (not found)",
+                "loading": "Loading screens...",
+                "error": "Could not list screens: {{error}}",
+                "desc": "Choose which display the background watcher and manual screen capture use."
+            },
             "interval": {
                 "label": "Capture Interval",
                 "desc": "Lower = more responsive but uses more resources",
@@ -756,6 +766,14 @@
             "sensitivity": {
                 "label": "Change Sensitivity",
                 "desc": "Lower = more sensitive to screen changes ({{percent}}% pixel change required)"
+            },
+            "behavior": {
+                "title": "Background behavior",
+                "desc": "Choose whether screen observations run quietly in the background and whether they may start a proactive comment."
+            },
+            "auto": {
+                "label": "Automatic background observation",
+                "desc": "Watch changed screens in the background and prepare context for your next chat."
             },
             "proactive": {
                 "label": "Comment on screen changes",
