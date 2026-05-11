@@ -388,6 +388,26 @@ function App() {
     return status;
   }, []);
 
+  const getMemoryModelErrorMessage = useCallback((error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    if (typeof error === "object" && error !== null) {
+      const maybeMessage = (error as { message?: unknown }).message;
+      if (typeof maybeMessage === "string") return maybeMessage;
+
+      const values = Object.values(error as Record<string, unknown>);
+      const stringValue = values.find((value): value is string => typeof value === "string");
+      if (stringValue) return stringValue;
+
+      try {
+        return JSON.stringify(error);
+      } catch {
+        return Object.prototype.toString.call(error);
+      }
+    }
+    return String(error);
+  }, []);
+
   const startMemoryModelDownload = useCallback(async () => {
     if (memoryModelDownloadInFlightRef.current) {
       return;
@@ -411,7 +431,7 @@ function App() {
       const status = await downloadMemoryEmbeddingModel();
       setMemoryModelStatus(status);
     } catch (error) {
-      setMemoryModelError(error instanceof Error ? error.message : String(error));
+      setMemoryModelError(getMemoryModelErrorMessage(error));
     } finally {
       memoryModelDownloadInFlightRef.current = false;
       setMemoryModelDownloading(false);
@@ -430,9 +450,9 @@ function App() {
         void startMemoryModelDownload();
       }
     } catch (error) {
-      setMemoryModelError(error instanceof Error ? error.message : String(error));
+      setMemoryModelError(getMemoryModelErrorMessage(error));
     }
-  }, [memoryModelError, memoryModelStatus, refreshMemoryModelStatus, startMemoryModelDownload]);
+  }, [getMemoryModelErrorMessage, memoryModelError, memoryModelStatus, refreshMemoryModelStatus, startMemoryModelDownload]);
 
   const closeOnboarding = (status: "completed" | "dismissed") => {
     localStorage.setItem(ONBOARDING_STATUS_KEY, status);
@@ -470,9 +490,9 @@ function App() {
   useEffect(() => {
     refreshMemoryModelStatus().catch((err) => {
       console.error("[App] Failed to load memory model status:", err);
-      setMemoryModelError(err instanceof Error ? err.message : String(err));
+      setMemoryModelError(getMemoryModelErrorMessage(err));
     });
-  }, [refreshMemoryModelStatus]);
+  }, [getMemoryModelErrorMessage, refreshMemoryModelStatus]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

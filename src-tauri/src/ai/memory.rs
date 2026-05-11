@@ -1695,9 +1695,15 @@ struct MemoryModelProgressReporter {
     emit_progress: std::sync::Arc<
         dyn Fn(MemoryEmbeddingModelDownloadProgress) -> Result<(), String> + Send + Sync,
     >,
-    file_name: String,
     file_index: usize,
     file_count: usize,
+    state: std::sync::Arc<std::sync::Mutex<MemoryModelProgressState>>,
+}
+
+#[cfg(not(test))]
+#[derive(Debug, Default)]
+struct MemoryModelProgressState {
+    file_name: String,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
 }
@@ -1714,24 +1720,31 @@ impl MemoryModelProgressReporter {
     ) -> Self {
         Self {
             emit_progress,
-            file_name,
             file_index,
             file_count,
-            downloaded_bytes: 0,
-            total_bytes: None,
+            state: std::sync::Arc::new(std::sync::Mutex::new(MemoryModelProgressState {
+                file_name,
+                downloaded_bytes: 0,
+                total_bytes: None,
+            })),
         }
     }
 
     fn emit(&self, stage: &str, message: String) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let progress = build_download_progress(
             stage,
             message,
-            self.file_name.clone(),
+            state.file_name.clone(),
             self.file_index,
             self.file_count,
-            self.downloaded_bytes,
-            self.total_bytes,
+            state.downloaded_bytes,
+            state.total_bytes,
         );
+        drop(state);
         if let Err(error) = (self.emit_progress)(progress) {
             tracing::warn!(
                 target: "memory",
@@ -1745,9 +1758,15 @@ impl MemoryModelProgressReporter {
 #[cfg(not(test))]
 impl hf_hub::api::tokio::Progress for MemoryModelProgressReporter {
     async fn init(&mut self, size: usize, filename: &str) {
-        self.file_name = filename.to_string();
-        self.downloaded_bytes = 0;
-        self.total_bytes = Some(size as u64);
+        {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.file_name = filename.to_string();
+            state.downloaded_bytes = 0;
+            state.total_bytes = Some(size as u64);
+        }
         self.emit(
             "downloading",
             format!(
@@ -1758,25 +1777,39 @@ impl hf_hub::api::tokio::Progress for MemoryModelProgressReporter {
     }
 
     async fn update(&mut self, size: usize) {
-        self.downloaded_bytes += size as u64;
+        let file_name = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.downloaded_bytes = state.downloaded_bytes.saturating_add(size as u64);
+            state.file_name.clone()
+        };
         self.emit(
             "downloading",
             format!(
                 "Downloading {} ({}/{})",
-                self.file_name, self.file_index, self.file_count
+                file_name, self.file_index, self.file_count
             ),
         );
     }
 
     async fn finish(&mut self) {
-        if let Some(total_bytes) = self.total_bytes {
-            self.downloaded_bytes = total_bytes;
-        }
+        let file_name = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(total_bytes) = state.total_bytes {
+                state.downloaded_bytes = total_bytes;
+            }
+            state.file_name.clone()
+        };
         self.emit(
             "complete",
             format!(
                 "Finished {} ({}/{})",
-                self.file_name, self.file_index, self.file_count
+                file_name, self.file_index, self.file_count
             ),
         );
     }
