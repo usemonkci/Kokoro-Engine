@@ -769,7 +769,7 @@
             },
             "behavior": {
                 "title": "Background behavior",
-                "desc": "Choose whether screen observations run quietly in the background and whether they may start a proactive comment."
+                "desc": ""
             },
             "auto": {
                 "label": "Automatic background observation",
@@ -783,7 +783,7 @@
             },
             "proactive": {
                 "label": "Comment on screen changes",
-                "desc": "When off, vision is still analyzed and used as chat context, but it will not trigger proactive messages."
+                "desc": "When off, screen changes will not trigger comments; if automatic background observation is still on, the latest screen result can still be used as context for the next chat."
             },
             "save": "Apply Changes",
             "test": {

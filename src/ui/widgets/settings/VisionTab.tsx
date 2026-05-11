@@ -800,9 +800,11 @@ export default function VisionTab({ initialConfig = null, onConfigChange }: { in
                         <div className="text-xs font-heading font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
                             {t("settings.vision.behavior.title")}
                         </div>
-                        <div className="mt-0.5 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-                            {t("settings.vision.behavior.desc")}
-                        </div>
+                        {t("settings.vision.behavior.desc") && (
+                            <div className="mt-0.5 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+                                {t("settings.vision.behavior.desc")}
+                            </div>
+                        )}
                     </div>
 
                     <div className="divide-y divide-[var(--color-border)]/70">
