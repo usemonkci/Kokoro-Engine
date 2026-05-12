@@ -306,6 +306,17 @@ fn normalize_vlm_chat_base_url(provider: &str, base_url: Option<&str>) -> String
     )
 }
 
+fn should_bypass_proxy_for_vlm(provider: &str) -> bool {
+    matches!(provider, "ollama" | "llama_cpp")
+}
+
+fn no_proxy_client_for_vlm() -> Result<Client, String> {
+    Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("Failed to build local VLM HTTP client: {}", e))
+}
+
 /// Send a screenshot to the VLM for analysis.
 /// When `vlm_provider` is "llm", delegates to the active LlmService provider.
 /// Otherwise uses the independently configured VLM endpoint (ollama / openai /
@@ -364,6 +375,13 @@ pub async fn analyze_screenshot(
         let chat_base_url =
             normalize_vlm_chat_base_url(&config.vlm_provider, config.vlm_base_url.as_deref());
         let url = format!("{}/chat/completions", chat_base_url);
+        let local_no_proxy_client;
+        let request_client = if should_bypass_proxy_for_vlm(&config.vlm_provider) {
+            local_no_proxy_client = no_proxy_client_for_vlm()?;
+            &local_no_proxy_client
+        } else {
+            client
+        };
 
         let body = serde_json::json!({
             "model": config.vlm_model,
@@ -378,7 +396,7 @@ pub async fn analyze_screenshot(
             "temperature": 0.3
         });
 
-        let mut req = client
+        let mut req = request_client
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&body);

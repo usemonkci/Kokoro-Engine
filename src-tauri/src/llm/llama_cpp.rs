@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::llm::provider::{
     build_openai_client, create_chat, create_chat_stream, create_chat_stream_with_tools,
-    list_model_ids, LlmParams, LlmProvider, LlmStreamEvent, LlmToolDefinition,
+    LlmParams, LlmProvider, LlmStreamEvent, LlmToolDefinition,
 };
 
 const DEFAULT_LLAMA_CPP_BASE_URL: &str = "http://127.0.0.1:8080";
@@ -84,14 +84,39 @@ impl LlamaCppProvider {
     }
 
     pub async fn list_models(base_url: &str) -> Result<Vec<String>, String> {
-        let client = build_openai_client(
-            "llama.cpp".to_string(),
-            Some(normalize_llama_cpp_chat_base_url(base_url)),
-        );
-
-        let mut model_ids = list_model_ids(&client)
+        let server_base = normalize_llama_cpp_server_base_url(base_url);
+        let client = llama_cpp_probe_client()?;
+        let response = client
+            .get(format!("{}/v1/models", server_base))
+            .send()
             .await
             .map_err(|e| format!("Failed to list llama.cpp models at {}: {}", base_url, e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "llama.cpp /v1/models returned error {}: {}",
+                status, error_text
+            ));
+        }
+
+        let payload = response
+            .json::<LlamaCppModelListResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse llama.cpp /v1/models response: {}", e))?;
+
+        let mut model_ids: Vec<String> = payload
+            .data
+            .into_iter()
+            .filter_map(|model| non_empty_trimmed(model.id))
+            .chain(payload.models.into_iter().filter_map(|model| {
+                model
+                    .name
+                    .and_then(non_empty_trimmed)
+                    .or_else(|| model.model.and_then(non_empty_trimmed))
+            }))
+            .collect();
         model_ids.sort();
         model_ids.dedup();
         Ok(model_ids)
@@ -134,11 +159,16 @@ impl LlmProvider for LlamaCppProvider {
     }
 }
 
-async fn fetch_server_props(base_url: &str) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
+fn llama_cpp_probe_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
+        .no_proxy()
         .build()
-        .map_err(|e| format!("Failed to build llama.cpp probe client: {}", e))?;
+        .map_err(|e| format!("Failed to build llama.cpp probe client: {}", e))
+}
+
+async fn fetch_server_props(base_url: &str) -> Result<Value, String> {
+    let client = llama_cpp_probe_client()?;
 
     let response = client
         .get(format!("{}/props", base_url))
@@ -154,6 +184,25 @@ async fn fetch_server_props(base_url: &str) -> Result<Value, String> {
         .json::<Value>()
         .await
         .map_err(|e| format!("Failed to parse llama.cpp /props response: {}", e))
+}
+
+#[derive(Debug, Deserialize)]
+struct LlamaCppModelListResponse {
+    #[serde(default)]
+    data: Vec<LlamaCppOpenAiModel>,
+    #[serde(default)]
+    models: Vec<LlamaCppNativeModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlamaCppOpenAiModel {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlamaCppNativeModel {
+    name: Option<String>,
+    model: Option<String>,
 }
 
 fn extract_current_model_from_props(props: &Value) -> Option<String> {
@@ -248,6 +297,15 @@ fn value_as_non_empty_string(value: &Value) -> Option<String> {
             }
         }
         _ => None,
+    }
+}
+
+fn non_empty_trimmed(text: String) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
