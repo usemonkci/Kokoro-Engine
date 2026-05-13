@@ -1480,6 +1480,14 @@ export async function saveBotConfig(config: BotConfig): Promise<void> {
     return invoke("save_bot_config", { config });
 }
 
+export async function startBotPlatform(platform: Exclude<BotPlatformId, "telegram">): Promise<void> {
+    return invoke("start_bot_platform", { platform });
+}
+
+export async function stopBotPlatform(platform: Exclude<BotPlatformId, "telegram">): Promise<void> {
+    return invoke("stop_bot_platform", { platform });
+}
+
 export async function getBotStatus(): Promise<BotStatus> {
     return invoke<BotStatus>("get_bot_status");
 }

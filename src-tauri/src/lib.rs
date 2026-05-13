@@ -209,6 +209,8 @@ pub fn run() {
             commands::singing::convert_singing,
             commands::bot::get_bot_config,
             commands::bot::save_bot_config,
+            commands::bot::start_bot_platform,
+            commands::bot::stop_bot_platform,
             commands::bot::get_bot_status,
             commands::telegram::get_telegram_config,
             commands::telegram::save_telegram_config,
@@ -747,8 +749,10 @@ pub fn run() {
 
             // Bot integrations (Telegram currently has a runtime service).
             let bot_config = crate::commands::bot::load_bot_config();
-            let telegram_config = bot_config.telegram;
+            let telegram_config = bot_config.telegram.clone();
             let telegram_enabled = telegram_config.enabled;
+            let bot_runtime_service = crate::commands::bot::BotRuntimeService::new(bot_config);
+            app.manage(bot_runtime_service.clone());
             tracing::info!(
                 target: "startup",
                 "stage=telegram.init.start elapsed_ms={}",
@@ -771,6 +775,14 @@ pub fn run() {
                     if let Err(e) = telegram_service.start(tg_app).await {
                         tracing::error!(target: "telegram", "[Telegram] Auto-start failed: {}", e);
                     }
+                });
+            }
+
+            {
+                let bot_app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    bot_runtime_service.start_enabled(bot_app).await;
                 });
             }
 

@@ -20,14 +20,18 @@ import {
 import { useTranslation } from "react-i18next";
 import {
     getTelegramStatus,
+    getBotStatus,
     listCharacters,
     saveBotConfig,
+    startBotPlatform,
     startTelegramBot,
+    stopBotPlatform,
     stopTelegramBot,
 } from "../../../lib/kokoro-bridge";
 import type {
     BotConfig,
     BotPlatformId,
+    BotStatus,
     CharacterRecord,
     DiscordBotConfig,
     LineBotConfig,
@@ -55,6 +59,7 @@ export default function BotTab({
     const hasInitialStatus = initialStatus !== undefined;
     const hasInitialCharacters = initialCharacters !== undefined;
     const [status, setStatus] = useState<TelegramStatus | null>(initialStatus ?? null);
+    const [botStatus, setBotStatus] = useState<BotStatus | null>(null);
     const [loading, setLoading] = useState(!(hasInitialStatus && hasInitialCharacters));
     const [dirty, setDirty] = useState(false);
     const [listInput, setListInput] = useState("");
@@ -86,12 +91,14 @@ export default function BotTab({
 
     const loadStatus = async () => {
         try {
-            const [st, chars] = await Promise.all([
+            const [telegramStatus, runtimeStatus, characterList] = await Promise.all([
                 getTelegramStatus(),
+                getBotStatus(),
                 listCharacters(),
             ]);
-            setStatus(st);
-            setCharacters(chars);
+            setStatus(telegramStatus);
+            setBotStatus(runtimeStatus);
+            setCharacters(characterList);
         } catch (e) {
             console.error("[BotTab] Failed to load status:", e);
         } finally {
@@ -114,6 +121,7 @@ export default function BotTab({
 
         pollRef.current = setInterval(() => {
             getTelegramStatus().then(setStatus).catch(() => {});
+            getBotStatus().then(setBotStatus).catch(() => {});
         }, 5000);
 
         return () => {
@@ -185,6 +193,28 @@ export default function BotTab({
         }
     };
 
+    const handleStartRuntime = async (platform: Exclude<BotPlatformId, "telegram">) => {
+        try {
+            if (dirty) {
+                await saveBotConfig(botConfig);
+                setDirty(false);
+            }
+            await startBotPlatform(platform);
+            setBotStatus(await getBotStatus());
+        } catch (e) {
+            console.error(`[BotTab] ${platform} start failed:`, e);
+        }
+    };
+
+    const handleStopRuntime = async (platform: Exclude<BotPlatformId, "telegram">) => {
+        try {
+            await stopBotPlatform(platform);
+            setBotStatus(await getBotStatus());
+        } catch (e) {
+            console.error(`[BotTab] ${platform} stop failed:`, e);
+        }
+    };
+
     const characterOptions = [
         { value: "", label: t("telegram.character_id.auto") },
         ...characters.map(char => ({
@@ -227,28 +257,40 @@ export default function BotTab({
             {selectedPlatform === "discord" && (
                 <DiscordSettings
                     config={botConfig.discord}
+                    running={botStatus?.discord.running ?? false}
                     listInput={listInput}
                     setListInput={setListInput}
                     characterOptions={characterOptions}
                     onUpdate={updateDiscord}
+                    onStart={() => handleStartRuntime("discord")}
+                    onStop={() => handleStopRuntime("discord")}
+                    onRefresh={loadStatus}
                 />
             )}
 
             {selectedPlatform === "line" && (
                 <LineSettings
                     config={botConfig.line}
+                    running={botStatus?.line.running ?? false}
                     listInput={listInput}
                     setListInput={setListInput}
                     characterOptions={characterOptions}
                     onUpdate={updateLine}
+                    onStart={() => handleStartRuntime("line")}
+                    onStop={() => handleStopRuntime("line")}
+                    onRefresh={loadStatus}
                 />
             )}
 
             {selectedPlatform === "webhook" && (
                 <WebhookSettings
                     config={botConfig.webhook}
+                    running={botStatus?.webhook.running ?? false}
                     characterOptions={characterOptions}
                     onUpdate={updateWebhook}
+                    onStart={() => handleStartRuntime("webhook")}
+                    onStop={() => handleStopRuntime("webhook")}
+                    onRefresh={loadStatus}
                 />
             )}
         </div>
@@ -259,10 +301,18 @@ function PlatformHeader({
     icon: Icon,
     title,
     enabled,
+    running,
+    onStart,
+    onStop,
+    onRefresh,
 }: {
     icon: typeof Bot;
     title: string;
     enabled: boolean;
+    running: boolean;
+    onStart: () => void;
+    onStop: () => void;
+    onRefresh: () => void;
 }) {
     const { t } = useTranslation();
     return (
@@ -272,13 +322,44 @@ function PlatformHeader({
                 <div>
                     <div className="text-sm font-heading font-semibold">{title}</div>
                     <div className="text-xs text-[var(--color-text-muted)]">
-                        {enabled ? t("bot.status.enabled") : t("bot.status.disabled")}
+                        {running ? t("telegram.status.running") : enabled ? t("bot.status.enabled") : t("bot.status.disabled")}
                     </div>
                 </div>
                 <div className={clsx(
                     "w-2 h-2 rounded-full",
-                    enabled ? "bg-[var(--color-accent)]" : "bg-[var(--color-text-muted)]"
+                    running ? "bg-[var(--color-accent)]" : "bg-[var(--color-text-muted)]"
                 )} />
+            </div>
+            <div className="flex items-center gap-2">
+                {running ? (
+                    <motion.button
+                        whileTap={{ scale: 0.95 }}
+                        onClick={onStop}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-heading
+                            bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors"
+                    >
+                        <Square size={12} /> {t("telegram.stop")}
+                    </motion.button>
+                ) : (
+                    <motion.button
+                        whileTap={{ scale: 0.95 }}
+                        onClick={onStart}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-heading
+                            bg-[var(--color-accent)]/20 text-[var(--color-accent)] border border-[var(--color-accent)]/30
+                            hover:bg-[var(--color-accent)]/30 transition-colors"
+                    >
+                        <Play size={12} /> {t("telegram.start")}
+                    </motion.button>
+                )}
+                <motion.button
+                    whileTap={{ scale: 0.95 }}
+                    onClick={onRefresh}
+                    className="p-1.5 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+                    aria-label={t("common.actions.refresh")}
+                    title={t("common.actions.refresh")}
+                >
+                    <RefreshCw size={14} />
+                </motion.button>
             </div>
         </div>
     );
@@ -589,21 +670,37 @@ function TelegramSettings({
 
 function DiscordSettings({
     config,
+    running,
     listInput,
     setListInput,
     characterOptions,
     onUpdate,
+    onStart,
+    onStop,
+    onRefresh,
 }: {
     config: DiscordBotConfig;
+    running: boolean;
     listInput: string;
     setListInput: (value: string) => void;
     characterOptions: Array<{ value: string; label: string }>;
     onUpdate: (patch: Partial<DiscordBotConfig>) => void;
+    onStart: () => void;
+    onStop: () => void;
+    onRefresh: () => void;
 }) {
     const { t } = useTranslation();
     return (
         <div className="space-y-6">
-            <PlatformHeader icon={MessageCircle} title={t("bot.platform.discord")} enabled={config.enabled} />
+            <PlatformHeader
+                icon={MessageCircle}
+                title={t("bot.platform.discord")}
+                enabled={config.enabled}
+                running={running}
+                onStart={onStart}
+                onStop={onStop}
+                onRefresh={onRefresh}
+            />
             <ToggleRow
                 label={t("bot.fields.enable_platform", { platform: t("bot.platform.discord") })}
                 enabled={config.enabled}
@@ -646,21 +743,37 @@ function DiscordSettings({
 
 function LineSettings({
     config,
+    running,
     listInput,
     setListInput,
     characterOptions,
     onUpdate,
+    onStart,
+    onStop,
+    onRefresh,
 }: {
     config: LineBotConfig;
+    running: boolean;
     listInput: string;
     setListInput: (value: string) => void;
     characterOptions: Array<{ value: string; label: string }>;
     onUpdate: (patch: Partial<LineBotConfig>) => void;
+    onStart: () => void;
+    onStop: () => void;
+    onRefresh: () => void;
 }) {
     const { t } = useTranslation();
     return (
         <div className="space-y-6">
-            <PlatformHeader icon={Send} title={t("bot.platform.line")} enabled={config.enabled} />
+            <PlatformHeader
+                icon={Send}
+                title={t("bot.platform.line")}
+                enabled={config.enabled}
+                running={running}
+                onStart={onStart}
+                onStop={onStop}
+                onRefresh={onRefresh}
+            />
             <ToggleRow
                 label={t("bot.fields.enable_platform", { platform: t("bot.platform.line") })}
                 enabled={config.enabled}
@@ -716,17 +829,33 @@ function LineSettings({
 
 function WebhookSettings({
     config,
+    running,
     characterOptions,
     onUpdate,
+    onStart,
+    onStop,
+    onRefresh,
 }: {
     config: WebhookBotConfig;
+    running: boolean;
     characterOptions: Array<{ value: string; label: string }>;
     onUpdate: (patch: Partial<WebhookBotConfig>) => void;
+    onStart: () => void;
+    onStop: () => void;
+    onRefresh: () => void;
 }) {
     const { t } = useTranslation();
     return (
         <div className="space-y-6">
-            <PlatformHeader icon={Webhook} title={t("bot.platform.webhook")} enabled={config.enabled} />
+            <PlatformHeader
+                icon={Webhook}
+                title={t("bot.platform.webhook")}
+                enabled={config.enabled}
+                running={running}
+                onStart={onStart}
+                onStop={onStop}
+                onRefresh={onRefresh}
+            />
             <ToggleRow
                 label={t("bot.fields.enable_platform", { platform: t("bot.platform.webhook") })}
                 enabled={config.enabled}
