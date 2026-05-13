@@ -9,7 +9,8 @@
             "done": "Done",
             "delete": "Delete",
             "add": "Add",
-            "rename": "Rename"
+            "rename": "Rename",
+            "refresh": "Refresh"
         }
     },
     "sing": {
@@ -76,6 +77,7 @@
             "vision": "VISION",
             "mods": "MODS",
             "mcp": "MCP",
+            "bot": "BOT",
             "telegram": "TELEGRAM",
             "jailbreak": "JAILBREAK",
             "backup": "BACKUP",
@@ -1126,6 +1128,54 @@
         "empty": {
             "title": "No mods installed",
             "description": "Add mods to the <1>mods/</1> directory"
+        }
+    },
+    "bot": {
+        "title": "Bot Integrations",
+        "status": {
+            "enabled": "Enabled",
+            "disabled": "Disabled"
+        },
+        "character_hint": "Conversation memory and history from this platform will be attributed to the selected character",
+        "platform": {
+            "label": "Platform",
+            "telegram": "Telegram",
+            "telegram_desc": "Telegram Bot API",
+            "discord": "Discord",
+            "discord_desc": "Discord bot token and channel access",
+            "line": "LINE",
+            "line_desc": "LINE Messaging API webhook settings",
+            "webhook": "Webhook",
+            "webhook_desc": "Generic HTTP webhook endpoint",
+            "coming_soon": "Coming soon"
+        },
+        "fields": {
+            "enable_platform": "Enable {{platform}}"
+        },
+        "discord": {
+            "bot_token": "BOT TOKEN",
+            "bot_token_placeholder": "Discord bot token",
+            "allow_dm": "Allow direct messages",
+            "allowed_channels": "ALLOWED CHANNEL IDS",
+            "allowed_channels_desc": "Only these Discord channels can interact with the bot. Empty = allow DMs only.",
+            "channel_placeholder": "Channel ID"
+        },
+        "line": {
+            "access_token": "CHANNEL ACCESS TOKEN",
+            "access_token_placeholder": "LINE channel access token",
+            "channel_secret": "CHANNEL SECRET",
+            "channel_secret_placeholder": "LINE channel secret",
+            "webhook_path": "Webhook path",
+            "allowed_users": "ALLOWED USER IDS",
+            "allowed_users_desc": "Only these LINE users can interact with the bot. Empty = allow all verified LINE events.",
+            "user_placeholder": "User ID"
+        },
+        "webhook": {
+            "bind_host": "Bind host",
+            "port": "Port",
+            "endpoint_path": "Endpoint path",
+            "bearer_token": "BEARER TOKEN",
+            "bearer_token_placeholder": "Optional shared secret"
         }
     },
     "telegram": {

@@ -9,7 +9,8 @@
       "done": "Готово",
       "delete": "Удалить",
       "add": "Добавить",
-      "rename": "Переименовать"
+      "rename": "Переименовать",
+      "refresh": "Обновить"
     }
   },
   "sing": {
@@ -76,6 +77,7 @@
       "vision": "Зрение",
       "mods": "Моды",
       "mcp": "MCP",
+      "bot": "Bot",
       "telegram": "Telegram",
       "jailbreak": "Jailbreak",
       "backup": "Резервное копирование",
@@ -1126,6 +1128,54 @@
     "empty": {
       "title": "Моды не установлены",
       "description": "Добавьте моды в каталог <1>mods/</1>"
+    }
+  },
+  "bot": {
+    "title": "Интеграции Bot",
+    "status": {
+      "enabled": "Включено",
+      "disabled": "Отключено"
+    },
+    "character_hint": "Память и история диалога этой платформы будут отнесены к выбранному персонажу",
+    "platform": {
+      "label": "Платформа",
+      "telegram": "Telegram",
+      "telegram_desc": "Telegram Bot API",
+      "discord": "Discord",
+      "discord_desc": "Токен бота Discord и доступ к каналам",
+      "line": "LINE",
+      "line_desc": "Настройки Webhook для LINE Messaging API",
+      "webhook": "Webhook",
+      "webhook_desc": "Универсальный HTTP Webhook",
+      "coming_soon": "Скоро"
+    },
+    "fields": {
+      "enable_platform": "Включить {{platform}}"
+    },
+    "discord": {
+      "bot_token": "ТОКЕН БОТА",
+      "bot_token_placeholder": "Discord Bot Token",
+      "allow_dm": "Разрешить личные сообщения",
+      "allowed_channels": "РАЗРЕШЁННЫЕ CHANNEL ID",
+      "allowed_channels_desc": "Только эти каналы Discord могут взаимодействовать с ботом. Пусто = разрешить только личные сообщения.",
+      "channel_placeholder": "Channel ID"
+    },
+    "line": {
+      "access_token": "CHANNEL ACCESS TOKEN",
+      "access_token_placeholder": "LINE Channel Access Token",
+      "channel_secret": "CHANNEL SECRET",
+      "channel_secret_placeholder": "LINE Channel Secret",
+      "webhook_path": "Путь Webhook",
+      "allowed_users": "РАЗРЕШЁННЫЕ USER ID",
+      "allowed_users_desc": "Только эти пользователи LINE могут взаимодействовать с ботом. Пусто = разрешить все проверенные события LINE.",
+      "user_placeholder": "User ID"
+    },
+    "webhook": {
+      "bind_host": "Bind host",
+      "port": "Порт",
+      "endpoint_path": "Путь endpoint",
+      "bearer_token": "BEARER TOKEN",
+      "bearer_token_placeholder": "Необязательный общий секрет"
     }
   },
   "telegram": {

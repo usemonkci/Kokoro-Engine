@@ -21,6 +21,7 @@ const CONFIG_FILES: &[&str] = &[
     "vision_config.json",
     "imagegen_config.json",
     "mcp_servers.json",
+    "bot_config.json",
     "telegram_config.json",
     "jailbreak_prompt.json",
     "proactive_enabled.json",

@@ -9,7 +9,8 @@
             "done": "完成",
             "delete": "删除",
             "add": "添加",
-            "rename": "重命名"
+            "rename": "重命名",
+            "refresh": "刷新"
         }
     },
     "sing": {
@@ -76,6 +77,7 @@
             "vision": "视觉",
             "mods": "模组",
             "mcp": "MCP",
+            "bot": "Bot",
             "telegram": "Telegram",
             "jailbreak": "破限提示词",
             "backup": "备份",
@@ -1126,6 +1128,54 @@
         "empty": {
             "title": "未安装模组",
             "description": "请将模组添加到 <1>mods/</1> 目录"
+        }
+    },
+    "bot": {
+        "title": "Bot 接入",
+        "status": {
+            "enabled": "已启用",
+            "disabled": "未启用"
+        },
+        "character_hint": "该平台对话的记忆和历史将归属于所选角色",
+        "platform": {
+            "label": "平台",
+            "telegram": "Telegram",
+            "telegram_desc": "Telegram Bot API",
+            "discord": "Discord",
+            "discord_desc": "Discord Bot 令牌与频道访问",
+            "line": "LINE",
+            "line_desc": "LINE Messaging API Webhook 设置",
+            "webhook": "Webhook",
+            "webhook_desc": "通用 HTTP Webhook 入口",
+            "coming_soon": "暂不可用"
+        },
+        "fields": {
+            "enable_platform": "启用 {{platform}}"
+        },
+        "discord": {
+            "bot_token": "机器人令牌",
+            "bot_token_placeholder": "Discord Bot Token",
+            "allow_dm": "允许私信",
+            "allowed_channels": "允许的频道 ID",
+            "allowed_channels_desc": "只有这些 Discord 频道可以与机器人交互。留空 = 仅允许私信。",
+            "channel_placeholder": "频道 ID"
+        },
+        "line": {
+            "access_token": "频道访问令牌",
+            "access_token_placeholder": "LINE Channel Access Token",
+            "channel_secret": "频道密钥",
+            "channel_secret_placeholder": "LINE Channel Secret",
+            "webhook_path": "Webhook 路径",
+            "allowed_users": "允许的用户 ID",
+            "allowed_users_desc": "只有这些 LINE 用户可以与机器人交互。留空 = 允许所有已验证 LINE 事件。",
+            "user_placeholder": "用户 ID"
+        },
+        "webhook": {
+            "bind_host": "监听地址",
+            "port": "端口",
+            "endpoint_path": "入口路径",
+            "bearer_token": "Bearer 令牌",
+            "bearer_token_placeholder": "可选共享密钥"
         }
     },
     "telegram": {

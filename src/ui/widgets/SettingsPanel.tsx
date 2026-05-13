@@ -15,19 +15,20 @@ import ModelTab from "./settings/ModelTab";
 import BackgroundTab from "./settings/BackgroundTab";
 import VisionTab from "./settings/VisionTab";
 import McpTab from "./settings/McpTab";
-import TelegramTab from "./settings/TelegramTab";
+import BotTab from "./settings/BotTab";
 import { JailbreakTab } from "./settings/JailbreakTab";
 import { BackupTab } from "./settings/BackupTab";
 import PetTab from "./settings/PetTab";
 import AboutTab from "./settings/AboutTab";
 import { useTranslation } from "react-i18next";
-import { setPersona, setResponseLanguage, setUserLanguage, listTtsProviders, listTtsVoices, getTtsConfig, saveTtsConfig, saveImageGenConfig, getSttConfig, saveSttConfig, saveTelegramConfig, getTelegramConfig, saveLlmConfig } from "../../lib/kokoro-bridge";
+import { setPersona, setResponseLanguage, setUserLanguage, listTtsProviders, listTtsVoices, getTtsConfig, saveTtsConfig, saveImageGenConfig, getSttConfig, saveSttConfig, getBotConfig, saveBotConfig, saveLlmConfig } from "../../lib/kokoro-bridge";
 import type {
     ProviderStatus,
     VoiceProfile,
     TtsSystemConfig,
     ImageGenSystemConfig,
     SttConfig,
+    BotConfig,
     TelegramConfig,
     TelegramStatus,
     Live2dModelInfo,
@@ -44,7 +45,36 @@ import type {
 import { normalizeBackgroundConfigForImageCount, type BackgroundConfig } from "../hooks/useBackgroundSlideshow";
 import type { Live2DDisplayMode } from "../../features/live2d/Live2DViewer";
 
-export type SettingsTabId = "api" | "persona" | "tts" | "stt" | "sing" | "mods" | "bg" | "model" | "imagegen" | "memory" | "vision" | "mcp" | "telegram" | "jailbreak" | "backup" | "pet" | "about";
+const SETTINGS_TAB_IDS = [
+    "api",
+    "persona",
+    "tts",
+    "stt",
+    "sing",
+    "mods",
+    "bg",
+    "model",
+    "imagegen",
+    "memory",
+    "vision",
+    "mcp",
+    "bot",
+    "jailbreak",
+    "backup",
+    "pet",
+    "about",
+] as const;
+
+export type SettingsTabId = typeof SETTINGS_TAB_IDS[number];
+
+const SETTINGS_TAB_ID_SET = new Set<string>(SETTINGS_TAB_IDS);
+
+export function normalizeSettingsTabId(tab: string | null | undefined): SettingsTabId {
+    if (tab === "telegram") {
+        return "bot";
+    }
+    return tab && SETTINGS_TAB_ID_SET.has(tab) ? (tab as SettingsTabId) : "bg";
+}
 
 export interface BackgroundControls {
     config: BackgroundConfig;
@@ -124,7 +154,7 @@ const tabs: { id: SettingsTabId; label: string; icon: typeof Key }[] = [
     // 外部集成
     { id: "mods", label: "settings.tabs.mods", icon: Package },
     { id: "sing", label: "settings.tabs.sing", icon: Music },
-    { id: "telegram", label: "settings.tabs.telegram", icon: Bot },
+    { id: "bot", label: "settings.tabs.bot", icon: Bot },
     // 系统 / 高级
     { id: "api", label: "settings.tabs.api", icon: Key },
     { id: "jailbreak", label: "settings.tabs.jailbreak", icon: Shield },
@@ -245,11 +275,11 @@ function normalizeTtsVoice(
     return getDefaultTtsVoice(providerId, voices);
 }
 
-export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabProp, onActiveTabChange, backgroundControls, displayMode, onDisplayModeChange, customModelPath, onCustomModelChange, gazeTracking: gazeTrackingProp, onGazeTrackingChange, renderFps, onRenderFpsChange, sttConfig: sttConfigProp, voiceInterrupt: _voiceInterruptProp, imageGenConfig: imageGenConfigProp, telegramConfig: telegramConfigProp, llmConfig: llmConfigProp, onLlmConfigSaved, visionConfig: visionConfigProp, mcpServers: mcpServersProp, characters: charactersProp, initialTelegramStatus, onVisionConfigChange }: SettingsPanelProps) {
+export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabProp, onActiveTabChange, backgroundControls, displayMode, onDisplayModeChange, customModelPath, onCustomModelChange, gazeTracking: gazeTrackingProp, onGazeTrackingChange, renderFps, onRenderFpsChange, sttConfig: sttConfigProp, voiceInterrupt: _voiceInterruptProp, imageGenConfig: imageGenConfigProp, llmConfig: llmConfigProp, onLlmConfigSaved, visionConfig: visionConfigProp, mcpServers: mcpServersProp, characters: charactersProp, initialTelegramStatus, onVisionConfigChange }: SettingsPanelProps) {
     const { t, i18n } = useTranslation();
     const [internalActiveTab, setInternalActiveTab] = useState<SettingsTabId>(() => {
         const saved = localStorage.getItem("kokoro_settings_active_tab");
-        return (saved as SettingsTabId) || "bg";
+        return normalizeSettingsTabId(saved);
     });
     const activeTab = activeTabProp ?? internalActiveTab;
     const handleActiveTabChange = (tab: SettingsTabId) => {
@@ -295,10 +325,11 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
             setVoiceInterrupt(localStorage.getItem("kokoro_voice_interrupt") === "true");
             setResponseLang(localStorage.getItem("kokoro_response_language") || "");
             setUserLang(localStorage.getItem("kokoro_user_language") || "");
-            setLocalTelegramConfig(telegramConfigProp ?? null);
+            setLocalBotConfig(null);
             fetchData();
+            fetchBotConfig();
         }
-    }, [isOpen, telegramConfigProp]);
+    }, [isOpen]);
 
     useEffect(() => {
         if (!isOpen || bgConfigDirtyRef.current) return;
@@ -321,17 +352,6 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
             return next;
         });
     }, [activeTab]);
-
-    // Load Telegram config only when panel first opens, not on every bg.config change
-    useEffect(() => {
-        if (!isOpen) return;
-        if (telegramConfigProp) {
-            setLocalTelegramConfig(telegramConfigProp);
-            return;
-        }
-        setLocalTelegramConfig(null); // reset so fetchTelegramConfig always loads fresh
-        fetchTelegramConfig();
-    }, [isOpen, telegramConfigProp]);
 
     // Update local BG config helper
     const updateBgConfig = (update: Partial<BackgroundConfig>) => {
@@ -374,8 +394,8 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
     const [localSttConfig, setLocalSttConfig] = useState<SttConfig | null>(sttConfigProp ?? null);
     const [voiceInterrupt, setVoiceInterrupt] = useState(() => localStorage.getItem("kokoro_voice_interrupt") === "true");
 
-    // Telegram config state
-    const [localTelegramConfig, setLocalTelegramConfig] = useState<TelegramConfig | null>(null);
+    // Bot config state
+    const [localBotConfig, setLocalBotConfig] = useState<BotConfig | null>(null);
 
     // Response Language
     const [responseLang, setResponseLang] = useState(() => localStorage.getItem("kokoro_response_language") || "");
@@ -427,12 +447,12 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
         }
     };
 
-    const fetchTelegramConfig = async () => {
+    const fetchBotConfig = async () => {
         try {
-            const telegramConfig = await getTelegramConfig();
-            setLocalTelegramConfig(telegramConfig);
+            const botConfig = await getBotConfig();
+            setLocalBotConfig(botConfig);
         } catch (e) {
-            console.error("[SettingsPanel] Failed to fetch telegram config:", e);
+            console.error("[SettingsPanel] Failed to fetch bot config:", e);
         }
     };
 
@@ -567,12 +587,12 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
             }
         }
 
-        // Commit Telegram Config
-        if (localTelegramConfig) {
+        // Commit Bot Config
+        if (localBotConfig) {
             try {
-                await saveTelegramConfig(localTelegramConfig);
+                await saveBotConfig(localBotConfig);
             } catch (e) {
-                console.error("[SettingsPanel] Failed to save Telegram config:", e);
+                console.error("[SettingsPanel] Failed to save Bot config:", e);
             }
         }
 
@@ -805,13 +825,13 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
                                     />
                                 </div>
                             )}
-                            {mountedTabs.has("telegram") && (
-                                <div className={activeTab === "telegram" ? "block" : "hidden"}>
-                                    <TelegramTab
-                                        config={localTelegramConfig}
+                            {mountedTabs.has("bot") && (
+                                <div className={activeTab === "bot" ? "block" : "hidden"}>
+                                    <BotTab
+                                        botConfig={localBotConfig}
                                         initialStatus={initialTelegramStatus}
                                         initialCharacters={charactersProp}
-                                        onUpdate={(patch) => setLocalTelegramConfig(prev => prev ? { ...prev, ...patch } : prev)}
+                                        onBotConfigChange={setLocalBotConfig}
                                     />
                                 </div>
                             )}

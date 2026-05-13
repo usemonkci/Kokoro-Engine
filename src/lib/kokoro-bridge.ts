@@ -1417,6 +1417,73 @@ export async function onSingingProgress(callback: (event: SingingProgressEvent) 
     return listen<SingingProgressEvent>("singing:progress", (event) => callback(event.payload));
 }
 
+// ── Bot Integrations ───────────────────────────────
+
+export type BotPlatformId = "telegram" | "discord" | "line" | "webhook";
+
+export interface DiscordBotConfig {
+    enabled: boolean;
+    bot_token?: string;
+    bot_token_env?: string;
+    allowed_channel_ids: string[];
+    allow_direct_messages: boolean;
+    character_id?: string;
+}
+
+export interface LineBotConfig {
+    enabled: boolean;
+    channel_access_token?: string;
+    channel_access_token_env?: string;
+    channel_secret?: string;
+    channel_secret_env?: string;
+    webhook_path: string;
+    allowed_user_ids: string[];
+    character_id?: string;
+}
+
+export interface WebhookBotConfig {
+    enabled: boolean;
+    bind_host: string;
+    port: number;
+    endpoint_path: string;
+    bearer_token?: string;
+    bearer_token_env?: string;
+    character_id?: string;
+}
+
+export interface BotConfig {
+    selected_platform: BotPlatformId;
+    telegram: TelegramConfig;
+    discord: DiscordBotConfig;
+    line: LineBotConfig;
+    webhook: WebhookBotConfig;
+}
+
+export interface BotPlatformStatus {
+    enabled: boolean;
+    configured: boolean;
+    running: boolean;
+}
+
+export interface BotStatus {
+    telegram: BotPlatformStatus;
+    discord: BotPlatformStatus;
+    line: BotPlatformStatus;
+    webhook: BotPlatformStatus;
+}
+
+export async function getBotConfig(): Promise<BotConfig> {
+    return invoke<BotConfig>("get_bot_config");
+}
+
+export async function saveBotConfig(config: BotConfig): Promise<void> {
+    return invoke("save_bot_config", { config });
+}
+
+export async function getBotStatus(): Promise<BotStatus> {
+    return invoke<BotStatus>("get_bot_status");
+}
+
 // ── Telegram Bot ──────────────────────────────────
 
 export interface TelegramConfig {

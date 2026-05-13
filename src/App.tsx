@@ -10,7 +10,7 @@ import { defaultTheme } from "./ui/theme/default";
 import { registry } from "./ui/registry/ComponentRegistry";
 import { registerCoreComponents } from "./core/init";
 import { ttsService } from "./core/services";
-import SettingsPanel, { type SettingsTabId } from "./ui/widgets/SettingsPanel";
+import SettingsPanel, { normalizeSettingsTabId, type SettingsTabId } from "./ui/widgets/SettingsPanel";
 import BackgroundLayer from "./ui/widgets/BackgroundLayer";
 import OnboardingOverlay, {
   type OnboardingLanguageCode,
@@ -229,7 +229,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabId>(() => {
     const saved = localStorage.getItem("kokoro_settings_active_tab");
-    return (saved as SettingsTabId) || "bg";
+    return normalizeSettingsTabId(saved);
   });
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(() =>
     localStorage.getItem(ONBOARDING_STATUS_KEY) ? null : "language"

@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod auto_backup;
 pub mod backup;
+pub mod bot;
 pub mod character;
 pub mod characters;
 pub mod chat;

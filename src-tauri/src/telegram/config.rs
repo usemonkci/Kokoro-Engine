@@ -4,7 +4,7 @@ use crate::error::KokoroError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TelegramConfig {
     /// Whether the Telegram bot is enabled (auto-start on app launch).
     #[serde(default)]

@@ -207,6 +207,9 @@ pub fn run() {
             commands::singing::check_rvc_status,
             commands::singing::list_rvc_models,
             commands::singing::convert_singing,
+            commands::bot::get_bot_config,
+            commands::bot::save_bot_config,
+            commands::bot::get_bot_status,
             commands::telegram::get_telegram_config,
             commands::telegram::save_telegram_config,
             commands::telegram::start_telegram_bot,
@@ -742,9 +745,9 @@ pub fn run() {
             app.manage(crate::stt::NativeMicState::new());
             app.manage(crate::stt::NativeWakeWordState::new());
 
-            // Telegram Bot
-            let telegram_config_path = app_data.join("telegram_config.json");
-            let telegram_config = crate::telegram::load_config(&telegram_config_path);
+            // Bot integrations (Telegram currently has a runtime service).
+            let bot_config = crate::commands::bot::load_bot_config();
+            let telegram_config = bot_config.telegram;
             let telegram_enabled = telegram_config.enabled;
             tracing::info!(
                 target: "startup",

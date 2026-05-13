@@ -24,11 +24,9 @@ pub async fn save_telegram_config(
     state: State<'_, TelegramService>,
     config: crate::telegram::TelegramConfig,
 ) -> Result<(), KokoroError> {
-    let app_data = dirs_next::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.chyin.kokoro");
-    let config_path = app_data.join("telegram_config.json");
-    crate::telegram::save_config(&config_path, &config)?;
+    let mut bot_config = crate::commands::bot::load_bot_config();
+    bot_config.telegram = config.clone();
+    crate::commands::bot::save_bot_config_file(&bot_config)?;
     state.update_config(config).await;
     Ok(())
 }
