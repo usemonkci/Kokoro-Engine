@@ -1,10 +1,14 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
+
+const BUILTIN_MODEL_PREFIX: &str = "__builtin__/";
 
 /// Handler for the `live2d://` custom protocol.
 ///
-/// Serves files from `{app_data_dir}/live2d_models/` so pixi-live2d-display
-/// can resolve relative URLs (textures, moc3, motions) correctly.
+/// Serves imported models from `{app_data_dir}/live2d_models/` and builtin
+/// models from bundled/dev `live2d/` assets so pixi-live2d-display can
+/// resolve relative URLs (textures, moc3, motions) correctly.
 ///
 /// URL pattern (Windows):      `http://live2d.localhost/{model_name}/runtime/file.ext`
 /// URL pattern (macOS/Linux):  `live2d://localhost/{model_name}/runtime/file.ext`
@@ -42,19 +46,32 @@ pub fn handle_live2d_request() -> impl Fn(
         }
 
         let clean_path = path_str.strip_prefix('/').unwrap_or(&path_str);
-        let file_path = models_dir.join(clean_path);
-
-        // Security: 验证规范路径在 models 目录内，防止符号链接绕过
-        if let (Ok(canonical_base), Ok(canonical_file)) =
-            (models_dir.canonicalize(), file_path.canonicalize())
-        {
-            if !canonical_file.starts_with(&canonical_base) {
+        let file_path = match resolve_live2d_file(ctx.app_handle(), &models_dir, clean_path) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                tracing::error!(
+                    target: "live2d",
+                    "[live2d protocol] 404 Not Found: {}",
+                    clean_path
+                );
                 return tauri::http::Response::builder()
-                    .status(403)
-                    .body(b"Forbidden".to_vec())
+                    .status(404)
+                    .body(format!("Not Found: {}", clean_path).into_bytes())
                     .unwrap();
             }
-        }
+            Err(error) => {
+                tracing::error!(
+                    target: "live2d",
+                    "[live2d protocol] Failed to resolve {}: {}",
+                    clean_path,
+                    error
+                );
+                return tauri::http::Response::builder()
+                    .status(500)
+                    .body(b"Internal Server Error".to_vec())
+                    .unwrap();
+            }
+        };
 
         if !file_path.exists() || !file_path.is_file() {
             tracing::error!(
@@ -92,6 +109,84 @@ pub fn handle_live2d_request() -> impl Fn(
                     .unwrap()
             }
         }
+    }
+}
+
+fn resolve_live2d_file(
+    app_handle: &tauri::AppHandle,
+    models_dir: &Path,
+    clean_path: &str,
+) -> Result<Option<PathBuf>, String> {
+    if let Some(builtin_path) = clean_path.strip_prefix(BUILTIN_MODEL_PREFIX) {
+        return resolve_builtin_live2d_file(app_handle, builtin_path);
+    }
+
+    let file_path = models_dir.join(clean_path);
+    if !file_path.exists() {
+        return Ok(None);
+    }
+
+    ensure_within_root(models_dir, &file_path)?;
+    Ok(Some(file_path))
+}
+
+fn resolve_builtin_live2d_file(
+    app_handle: &tauri::AppHandle,
+    clean_path: &str,
+) -> Result<Option<PathBuf>, String> {
+    for root in builtin_live2d_roots(app_handle) {
+        let candidate = root.join(clean_path);
+        if !candidate.exists() {
+            continue;
+        }
+
+        ensure_within_root(&root, &candidate)?;
+        return Ok(Some(candidate));
+    }
+
+    Ok(None)
+}
+
+fn builtin_live2d_roots(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        roots.push(resource_dir.join("live2d"));
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd.join("public").join("live2d"));
+        roots.push(cwd.join("dist").join("live2d"));
+
+        if let Some(parent) = cwd.parent() {
+            roots.push(parent.join("public").join("live2d"));
+            roots.push(parent.join("dist").join("live2d"));
+        }
+    }
+
+    roots
+}
+
+fn ensure_within_root(root: &Path, candidate: &Path) -> Result<(), String> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("Failed to canonicalize root '{}': {}", root.display(), error))?;
+    let canonical_candidate = candidate.canonicalize().map_err(|error| {
+        format!(
+            "Failed to canonicalize file '{}': {}",
+            candidate.display(),
+            error
+        )
+    })?;
+
+    if canonical_candidate.starts_with(&canonical_root) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Resolved path '{}' escapes root '{}'",
+            canonical_candidate.display(),
+            canonical_root.display()
+        ))
     }
 }
 

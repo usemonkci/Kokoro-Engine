@@ -315,7 +315,7 @@ function App() {
     if (customModelPath) {
       return live2dUrl(customModelPath);
     }
-    return "/live2d/hiyori/hiyori_pro_t11.model3.json";
+    return live2dUrl(BUILTIN_LIVE2D_MODEL_PATH);
   }, [customModelPath]);
 
   useEffect(() => {
