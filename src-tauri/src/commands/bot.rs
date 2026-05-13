@@ -1,5 +1,15 @@
+use crate::actions::tool_settings::ToolSettings;
+use crate::actions::{execute_tool_calls, ToolInvocation};
+use crate::ai::context::AIOrchestrator;
+use crate::ai::memory_event_ingress::{
+    build_cooldown_key, select_memory_ingress_decision, should_use_structured_extraction,
+    MemoryEventIngressOptions,
+};
+use crate::ai::memory_extractor;
 use crate::error::KokoroError;
-use crate::llm::messages::{is_user_message, role_text_message, user_text_message};
+use crate::llm::messages::{
+    assistant_text_message, is_user_message, role_text_message, system_message, user_text_message,
+};
 use crate::llm::service::LlmService;
 use crate::telegram::TelegramService;
 use base64::Engine as _;
@@ -8,6 +18,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -387,7 +398,10 @@ pub async fn get_bot_status(
             configured: has_secret(
                 &config.line.channel_access_token,
                 &config.line.channel_access_token_env,
-            ) && has_secret(&config.line.channel_secret, &config.line.channel_secret_env),
+            ) && has_secret(
+                &config.line.channel_secret,
+                &config.line.channel_secret_env,
+            ),
             running: http_running && config.line.enabled,
         },
         webhook: BotPlatformStatus {
@@ -405,11 +419,24 @@ struct BotReply {
     translation: Option<String>,
 }
 
+fn reply_text_with_translation(reply: &BotReply) -> String {
+    if let Some(translation) = reply
+        .translation
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        format!("{}\n\nTranslation: {}", reply.reply, translation)
+    } else {
+        reply.reply.clone()
+    }
+}
+
 async fn generate_bot_reply(
     app: &tauri::AppHandle,
     platform: &str,
     text: &str,
     character_id: Option<&str>,
+    conversation_key: Option<&str>,
 ) -> Result<BotReply, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -417,11 +444,17 @@ async fn generate_bot_reply(
     }
 
     let orchestrator = app
-        .try_state::<crate::ai::context::AIOrchestrator>()
+        .try_state::<AIOrchestrator>()
         .ok_or("AIOrchestrator not available")?;
     let llm_service = app
         .try_state::<LlmService>()
         .ok_or("LlmService not available")?;
+    let action_registry = app
+        .try_state::<Arc<RwLock<crate::actions::ActionRegistry>>>()
+        .ok_or("ActionRegistry not available")?;
+    let tool_settings = app
+        .try_state::<Arc<RwLock<ToolSettings>>>()
+        .ok_or("ToolSettings not available")?;
 
     let char_id = match character_id.filter(|id| !id.trim().is_empty()) {
         Some(id) => id.to_string(),
@@ -435,6 +468,10 @@ async fn generate_bot_reply(
             }
         }
     };
+    let conversation_key = conversation_key
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(platform)
+        .to_string();
 
     orchestrator
         .add_message("user".to_string(), trimmed.to_string(), &char_id)
@@ -448,8 +485,22 @@ async fn generate_bot_reply(
         }),
     );
 
+    let tool_prompt = {
+        let registry = action_registry.read().await;
+        let settings = tool_settings.read().await;
+        let prompt = registry.generate_tool_prompt_for_prompt_with_settings(
+            orchestrator.is_memory_enabled(),
+            &settings,
+        );
+        if prompt.is_empty() {
+            None
+        } else {
+            Some(prompt)
+        }
+    };
+
     let (prompt_messages, compose_warnings) = orchestrator
-        .compose_prompt(trimmed, false, None, false, &char_id)
+        .compose_prompt(trimmed, false, tool_prompt, false, &char_id)
         .await
         .map_err(|e| e.to_string())?;
     for warning in compose_warnings {
@@ -466,48 +517,530 @@ async fn generate_bot_reply(
     }
 
     let provider = llm_service.provider().await;
-    let mut stream = provider
-        .chat_stream(client_messages, None)
-        .await
-        .map_err(|e| format!("LLM stream error: {}", e))?;
+    let max_rounds = {
+        let settings = tool_settings.read().await;
+        settings.max_tool_rounds.max(1)
+    };
+    let mut all_cleaned_text = String::new();
+    let mut all_translations = Vec::new();
 
-    let mut response = String::new();
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(delta) => response.push_str(&delta),
-            Err(error) => {
-                tracing::error!(target: "bot", "[{}] LLM stream error: {}", platform, error);
-                break;
+    for round in 0..max_rounds {
+        let mut stream = provider
+            .chat_stream(client_messages.clone(), None)
+            .await
+            .map_err(|e| format!("LLM stream error: {}", e))?;
+
+        let mut round_response = String::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(delta) => round_response.push_str(&delta),
+                Err(error) => {
+                    tracing::error!(target: "bot", "[{}] LLM stream error: {}", platform, error);
+                    break;
+                }
             }
         }
+
+        if round_response.is_empty() {
+            break;
+        }
+
+        let (cleaned, tool_calls) = parse_tool_call_tags(&round_response);
+        let (cleaned, round_translation) = extract_translate_tags(&cleaned);
+        let cleaned = strip_leaked_tags(&cleaned);
+
+        tracing::info!(
+            target: "bot::tools",
+            "[{}] tool loop round {}: {} tool call(s), char_id='{}'",
+            platform,
+            round + 1,
+            tool_calls.len(),
+            char_id
+        );
+
+        if let Some(translation) = round_translation {
+            all_translations.push(translation);
+        }
+        if !cleaned.is_empty() {
+            merge_continuation_text(&mut all_cleaned_text, &cleaned);
+        }
+
+        if tool_calls.is_empty() {
+            break;
+        }
+
+        let tool_invocations = {
+            let registry = action_registry.read().await;
+            tool_calls
+                .iter()
+                .map(|tool_call| {
+                    crate::commands::actions::build_tool_invocation_from_input(
+                        &registry,
+                        &tool_call.name,
+                        tool_call.args.clone(),
+                        None,
+                    )
+                    .map_err(|error| format!("Tool resolution error: {}", error.0))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let execution_outcomes = execute_tool_calls(
+            app,
+            &action_registry,
+            &tool_settings,
+            &char_id,
+            &tool_invocations,
+        )
+        .await;
+        let tool_results = execution_outcomes
+            .iter()
+            .map(|outcome| {
+                tracing::info!(
+                    target: "bot::tools",
+                    "[{}] executing {} with args {:?}",
+                    platform,
+                    outcome.invocation.name,
+                    outcome.invocation.args
+                );
+                match &outcome.result {
+                    Ok(result) => {
+                        tracing::info!(
+                            target: "bot::tools",
+                            "[{}] {} => {}",
+                            platform,
+                            outcome.tool_name(),
+                            result.message
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            target: "bot::tools",
+                            "[{}] {} failed: {}",
+                            platform,
+                            outcome.tool_name(),
+                            error
+                        );
+                    }
+                }
+                outcome.result_line()
+            })
+            .collect::<Vec<_>>();
+        let any_needs_feedback = execution_outcomes
+            .iter()
+            .any(|outcome| outcome.needs_feedback);
+
+        if !any_needs_feedback {
+            break;
+        }
+
+        client_messages.push(assistant_text_message(round_response));
+        client_messages.push(system_message(format!(
+            "[Tool results]\n{}\nContinue your response naturally.",
+            tool_results.join("\n")
+        )));
     }
 
-    let reply = compact_newlines(&strip_control_tags(&response));
+    let reply = compact_newlines(&strip_control_tags(&all_cleaned_text));
     if reply.is_empty() {
         return Err("No response from AI".to_string());
     }
+    let translation = if all_translations.is_empty() {
+        None
+    } else {
+        Some(compact_newlines(&all_translations.join(" ")))
+    };
 
+    let metadata = translation
+        .as_ref()
+        .map(|value| json!({ "translation": value }).to_string());
     orchestrator
-        .add_message("assistant".to_string(), reply.clone(), &char_id)
+        .add_message_with_metadata(
+            "assistant".to_string(),
+            reply.clone(),
+            metadata,
+            &char_id,
+            None,
+        )
         .await;
+
+    trigger_bot_memory_tasks(
+        platform,
+        trimmed,
+        &char_id,
+        &conversation_key,
+        &orchestrator,
+        &llm_service,
+    )
+    .await;
 
     let _ = app.emit(
         "telegram:chat-sync",
         json!({
             "role": "assistant",
             "text": reply.clone(),
+            "translation": translation.clone(),
         }),
     );
 
-    Ok(BotReply {
-        reply,
-        translation: None,
-    })
+    Ok(BotReply { reply, translation })
+}
+
+async fn trigger_bot_memory_tasks(
+    platform: &str,
+    user_text: &str,
+    char_id: &str,
+    conversation_key: &str,
+    orchestrator: &AIOrchestrator,
+    llm_service: &LlmService,
+) {
+    let msg_count = orchestrator.get_message_count().await;
+    let memory_msg_count = orchestrator.get_memory_trigger_count().await;
+    let upgrade_config =
+        crate::config::load_memory_upgrade_config(&crate::ai::memory::memory_upgrade_config_path());
+    let ingress_options = MemoryEventIngressOptions {
+        enabled: upgrade_config.event_trigger_enabled,
+        event_cooldown_secs: upgrade_config.event_cooldown_secs,
+        intent_routing_enabled: upgrade_config.intent_routing_enabled,
+    };
+    let memory_target_language = orchestrator.response_language.lock().await.clone();
+
+    tracing::info!(
+        target: "bot::memory",
+        "[{}] user message count: {}, memory trigger count: {}, char_id: {}",
+        platform,
+        msg_count,
+        memory_msg_count,
+        char_id
+    );
+
+    if orchestrator.is_memory_enabled() {
+        if let Some(decision) = select_memory_ingress_decision(user_text, &ingress_options) {
+            let cooldown_key =
+                build_cooldown_key(char_id, conversation_key, decision.event.event_type);
+            if orchestrator
+                .should_trigger_memory_event(&cooldown_key, decision.event.cooldown_secs)
+                .await
+            {
+                let history = orchestrator.get_recent_memory_history(10).await;
+                let memory_mgr = orchestrator.memory_manager.clone();
+                let provider_for_mem = llm_service.provider().await;
+                let char_id_for_mem = char_id.to_string();
+                let source = platform.to_string();
+                let memory_enabled = orchestrator.memory_enabled_flag();
+                let observation_started_at = std::time::Instant::now();
+                let trigger = decision.trigger_label.to_string();
+                let extraction_options = memory_extractor::MemoryExtractionOptions {
+                    structured_memory_enabled: should_use_structured_extraction(
+                        upgrade_config.structured_memory_enabled,
+                        &ingress_options,
+                    ),
+                    target_language: Some(memory_target_language.clone()),
+                };
+                tauri::async_runtime::spawn(async move {
+                    if !memory_enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
+                    let _ = memory_mgr
+                        .record_periodic_write_if_enabled(
+                            &char_id_for_mem,
+                            &source,
+                            &trigger,
+                            observation_started_at,
+                        )
+                        .await;
+                    memory_extractor::extract_and_store_memories_with_options(
+                        &history,
+                        &memory_mgr,
+                        provider_for_mem,
+                        char_id_for_mem,
+                        extraction_options,
+                    )
+                    .await;
+                });
+            }
+        }
+    }
+
+    if orchestrator.is_memory_enabled() && memory_msg_count > 0 && memory_msg_count % 5 == 0 {
+        let history = orchestrator.get_recent_memory_history(10).await;
+        let memory_mgr = orchestrator.memory_manager.clone();
+        let provider_for_mem = llm_service.provider().await;
+        let char_id_for_mem = char_id.to_string();
+        let source = platform.to_string();
+        let memory_enabled = orchestrator.memory_enabled_flag();
+        let observation_started_at = std::time::Instant::now();
+        let extraction_options = memory_extractor::MemoryExtractionOptions {
+            structured_memory_enabled: false,
+            target_language: Some(memory_target_language.clone()),
+        };
+        tauri::async_runtime::spawn(async move {
+            if !memory_enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let _ = memory_mgr
+                .record_periodic_write_if_enabled(
+                    &char_id_for_mem,
+                    &source,
+                    "periodic_extraction",
+                    observation_started_at,
+                )
+                .await;
+            memory_extractor::extract_and_store_memories_with_options(
+                &history,
+                &memory_mgr,
+                provider_for_mem,
+                char_id_for_mem,
+                extraction_options,
+            )
+            .await;
+        });
+    }
+
+    if orchestrator.is_memory_enabled() && memory_msg_count > 0 && memory_msg_count % 20 == 0 {
+        let memory_mgr = orchestrator.memory_manager.clone();
+        let char_id_for_consolidation = char_id.to_string();
+        let provider_for_consolidation = llm_service.provider().await;
+        let memory_enabled = orchestrator.memory_enabled_flag();
+        let observation_started_at = std::time::Instant::now();
+        let source = platform.to_string();
+        let target_language_for_consolidation = memory_target_language.clone();
+        tauri::async_runtime::spawn(async move {
+            if !memory_enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let _ = memory_mgr
+                .periodic_consolidation_observation(
+                    &char_id_for_consolidation,
+                    &source,
+                    observation_started_at,
+                )
+                .await;
+            match memory_mgr
+                .consolidate_memories_with_language(
+                    &char_id_for_consolidation,
+                    provider_for_consolidation,
+                    Some(target_language_for_consolidation),
+                )
+                .await
+            {
+                Ok(count) if count > 0 => {
+                    tracing::info!(
+                        target: "bot::memory",
+                        "[{}] consolidated {} memory clusters",
+                        source,
+                        count
+                    );
+                }
+                Err(error) => {
+                    tracing::error!(
+                        target: "bot::memory",
+                        "[{}] memory consolidation failed: {}",
+                        source,
+                        error
+                    );
+                }
+                _ => {}
+            }
+        });
+    }
+}
+
+const TOOL_CALL_TAG_PREFIX: &str = "[TOOL_CALL:";
+const TRANSLATE_TAG_PREFIX: &str = "[TRANSLATE:";
+
+#[derive(Debug, Clone)]
+struct ToolCall {
+    name: String,
+    args: HashMap<String, String>,
+}
+
+impl From<ToolCall> for ToolInvocation {
+    fn from(value: ToolCall) -> Self {
+        Self {
+            tool_call_id: None,
+            name: value.name,
+            args: value.args,
+        }
+    }
+}
+
+fn parse_tool_call_tags(text: &str) -> (String, Vec<ToolCall>) {
+    let mut result = text.to_string();
+    let mut calls = Vec::new();
+
+    while let Some(start) = result.rfind(TOOL_CALL_TAG_PREFIX) {
+        let rest = &result[start..];
+        if let Some(end_bracket) = rest.find(']') {
+            let inner = &rest[TOOL_CALL_TAG_PREFIX.len()..end_bracket];
+            let parts: Vec<&str> = inner.split('|').collect();
+            if let Some(name) = parts.first() {
+                let name = name.trim().to_string();
+                let mut args = HashMap::new();
+                for part in parts.iter().skip(1) {
+                    if let Some(eq_pos) = part.find('=') {
+                        let key = part[..eq_pos].trim().to_string();
+                        let val = part[eq_pos + 1..].trim().to_string();
+                        args.insert(key, val);
+                    }
+                }
+                calls.push(ToolCall { name, args });
+            }
+            let tag_end = start + end_bracket + 1;
+            result = format!(
+                "{}{}",
+                result[..start].trim_end(),
+                if tag_end < result.len() {
+                    &result[tag_end..]
+                } else {
+                    ""
+                }
+            );
+        } else {
+            break;
+        }
+    }
+
+    let mut extra_calls = Vec::new();
+    let mut cleaned = result.clone();
+    let mut offset = 0;
+    while offset < cleaned.len() {
+        let Some(rel_start) = cleaned[offset..].find('[') else {
+            break;
+        };
+        let start = offset + rel_start;
+        let rest = &cleaned[start..];
+        let Some(end) = rest.find(']') else {
+            break;
+        };
+        let inner = &rest[1..end];
+        let mut matched = false;
+        if let Some(pipe_pos) = inner.find('|') {
+            let name_part = &inner[..pipe_pos];
+            let is_identifier =
+                !name_part.is_empty() && name_part.chars().all(|c| c.is_alphanumeric() || c == '_');
+            let has_kv = inner[pipe_pos + 1..].contains('=');
+            if is_identifier && has_kv {
+                let parts: Vec<&str> = inner.split('|').collect();
+                let name = parts[0].trim().to_string();
+                let mut args = HashMap::new();
+                for part in parts.iter().skip(1) {
+                    if let Some(eq_pos) = part.find('=') {
+                        let key = part[..eq_pos].trim().to_string();
+                        let val = part[eq_pos + 1..].trim().to_string();
+                        args.insert(key, val);
+                    }
+                }
+                extra_calls.push(ToolCall { name, args });
+                let tag_end = start + end + 1;
+                cleaned = format!(
+                    "{}{}",
+                    cleaned[..start].trim_end(),
+                    if tag_end < cleaned.len() {
+                        &cleaned[tag_end..]
+                    } else {
+                        ""
+                    }
+                );
+                matched = true;
+            }
+        }
+        if !matched {
+            offset = start + 1;
+        }
+    }
+    calls.extend(extra_calls);
+    calls.reverse();
+    (cleaned.trim().to_string(), calls)
+}
+
+fn extract_translate_tags(text: &str) -> (String, Option<String>) {
+    let mut translations = Vec::new();
+    let mut result = text.to_string();
+    while let Some(start) = result.find(TRANSLATE_TAG_PREFIX) {
+        if let Some(end_bracket) = result[start..].find(']') {
+            let inner = &result[start + TRANSLATE_TAG_PREFIX.len()..start + end_bracket];
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                translations.push(trimmed.to_string());
+            }
+            let tag_end = start + end_bracket + 1;
+            result = format!(
+                "{}{}",
+                result[..start].trim_end(),
+                result[tag_end..].trim_start()
+            );
+        } else {
+            let inner = &result[start + TRANSLATE_TAG_PREFIX.len()..];
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                translations.push(trimmed.to_string());
+            }
+            result = result[..start].trim_end().to_string();
+        }
+    }
+    let translation = if translations.is_empty() {
+        None
+    } else {
+        Some(translations.join(" "))
+    };
+    (result.trim().to_string(), translation)
+}
+
+fn strip_leaked_tags(text: &str) -> String {
+    let mut result = text.to_string();
+    while let Some(start) = result.find("<tool_result>") {
+        if let Some(end) = result[start..].find("</tool_result>") {
+            let tag_end = start + end + "</tool_result>".len();
+            result = format!(
+                "{}{}",
+                result[..start].trim_end(),
+                result[tag_end..].trim_start()
+            );
+        } else {
+            let line_end = result[start..]
+                .find('\n')
+                .map(|i| start + i)
+                .unwrap_or(result.len());
+            result = format!("{}{}", result[..start].trim_end(), &result[line_end..]);
+        }
+    }
+    result.trim().to_string()
+}
+
+fn merge_continuation_text(accumulated: &mut String, next: &str) {
+    let next = next.trim();
+    if next.is_empty() {
+        return;
+    }
+    if accumulated.is_empty() {
+        accumulated.push_str(next);
+        return;
+    }
+    if !accumulated.ends_with(char::is_whitespace) && !next.starts_with(char::is_whitespace) {
+        accumulated.push(' ');
+    }
+    accumulated.push_str(next);
 }
 
 fn strip_control_tags(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
+    let mut bracket_cleaned = text.to_string();
+    for prefix in ["[ACTION:", "[EMOTION:", "[IMAGE_PROMPT:"] {
+        while let Some(start) = bracket_cleaned.find(prefix) {
+            if let Some(end) = bracket_cleaned[start..].find(']') {
+                let tag_end = start + end + 1;
+                bracket_cleaned = format!(
+                    "{}{}",
+                    bracket_cleaned[..start].trim_end(),
+                    bracket_cleaned[tag_end..].trim_start()
+                );
+            } else {
+                break;
+            }
+        }
+    }
+
+    let mut result = String::with_capacity(bracket_cleaned.len());
+    let mut chars = bracket_cleaned.chars().peekable();
 
     while let Some(ch) = chars.next() {
         if ch != '<' {
@@ -587,7 +1120,10 @@ fn bad_request(message: &str) -> warp::reply::Response {
 }
 
 fn server_error(message: &str) -> warp::reply::Response {
-    json_response(json!({ "error": message }), StatusCode::INTERNAL_SERVER_ERROR)
+    json_response(
+        json!({ "error": message }),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
 }
 
 async fn run_http_bot_server(
@@ -644,6 +1180,9 @@ struct GenericWebhookMessage {
     text: Option<String>,
     message: Option<String>,
     character_id: Option<String>,
+    conversation_id: Option<String>,
+    user_id: Option<String>,
+    source: Option<String>,
 }
 
 async fn handle_generic_webhook(
@@ -675,7 +1214,20 @@ async fn handle_generic_webhook(
         return bad_request("Missing text");
     }
 
-    match generate_bot_reply(&app, "webhook", &text, request.character_id.as_deref()).await {
+    let conversation_key = request
+        .conversation_id
+        .as_deref()
+        .or(request.user_id.as_deref())
+        .or(request.source.as_deref());
+    match generate_bot_reply(
+        &app,
+        "webhook",
+        &text,
+        request.character_id.as_deref(),
+        conversation_key,
+    )
+    .await
+    {
         Ok(reply) => json_response(json!(reply), StatusCode::OK),
         Err(error) => server_error(&error),
     }
@@ -755,7 +1307,11 @@ async fn handle_line_webhook(
             let Some(ref user_id) = user_id else {
                 continue;
             };
-            if !config.allowed_user_ids.iter().any(|allowed| allowed == user_id) {
+            if !config
+                .allowed_user_ids
+                .iter()
+                .any(|allowed| allowed == user_id)
+            {
                 continue;
             }
         }
@@ -763,9 +1319,18 @@ async fn handle_line_webhook(
             continue;
         };
 
-        match generate_bot_reply(&app, "line", &text, config.character_id.as_deref()).await {
+        match generate_bot_reply(
+            &app,
+            "line",
+            &text,
+            config.character_id.as_deref(),
+            user_id.as_deref(),
+        )
+        .await
+        {
             Ok(reply) => {
-                if let Err(error) = send_line_reply(&access_token, &reply_token, &reply.reply).await
+                let reply_text = reply_text_with_translation(&reply);
+                if let Err(error) = send_line_reply(&access_token, &reply_token, &reply_text).await
                 {
                     tracing::error!(target: "bot::line", "failed to send LINE reply: {}", error);
                 }
@@ -789,11 +1354,7 @@ fn verify_line_signature(secret: &str, body: &[u8], signature: &str) -> bool {
     expected == signature.trim()
 }
 
-async fn send_line_reply(
-    access_token: &str,
-    reply_token: &str,
-    text: &str,
-) -> Result<(), String> {
+async fn send_line_reply(access_token: &str, reply_token: &str, text: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
     let response = client
         .post("https://api.line.me/v2/bot/message/reply")
@@ -829,8 +1390,14 @@ async fn run_discord_gateway(
             break;
         }
 
-        match run_discord_session(&client, &token, config.clone(), app.clone(), &mut shutdown_rx)
-            .await
+        match run_discord_session(
+            &client,
+            &token,
+            config.clone(),
+            app.clone(),
+            &mut shutdown_rx,
+        )
+        .await
         {
             DiscordSessionExit::Shutdown => break,
             DiscordSessionExit::Reconnect => {
@@ -967,7 +1534,10 @@ async fn fetch_discord_gateway(client: &reqwest::Client, token: &str) -> Result<
         .await
         .map_err(|e| e.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("Discord gateway endpoint returned {}", response.status()));
+        return Err(format!(
+            "Discord gateway endpoint returned {}",
+            response.status()
+        ));
     }
     let json: Value = response.json().await.map_err(|e| e.to_string())?;
     json.get("url")
@@ -1023,9 +1593,26 @@ async fn handle_discord_message(
         return;
     }
 
-    match generate_bot_reply(app, "discord", &content, cfg.character_id.as_deref()).await {
+    let author_id = message
+        .get("author")
+        .and_then(|author| author.get("id"))
+        .and_then(Value::as_str);
+    let conversation_key = author_id
+        .map(|author| format!("{}:{}", channel_id, author))
+        .unwrap_or_else(|| channel_id.clone());
+
+    match generate_bot_reply(
+        app,
+        "discord",
+        &content,
+        cfg.character_id.as_deref(),
+        Some(&conversation_key),
+    )
+    .await
+    {
         Ok(reply) => {
-            if let Err(error) = send_discord_message(client, token, &channel_id, &reply.reply).await
+            let reply_text = reply_text_with_translation(&reply);
+            if let Err(error) = send_discord_message(client, token, &channel_id, &reply_text).await
             {
                 tracing::error!(target: "bot::discord", "failed to send Discord message: {}", error);
             }
@@ -1077,8 +1664,14 @@ mod tests {
     fn bot_config_defaults_cover_all_non_telegram_platforms() {
         let config = BotConfig::default();
         assert_eq!(config.selected_platform, "telegram");
-        assert_eq!(config.telegram.bot_token_env.as_deref(), Some("TELEGRAM_BOT_TOKEN"));
-        assert_eq!(config.discord.bot_token_env.as_deref(), Some("DISCORD_BOT_TOKEN"));
+        assert_eq!(
+            config.telegram.bot_token_env.as_deref(),
+            Some("TELEGRAM_BOT_TOKEN")
+        );
+        assert_eq!(
+            config.discord.bot_token_env.as_deref(),
+            Some("DISCORD_BOT_TOKEN")
+        );
         assert_eq!(
             config.line.channel_access_token_env.as_deref(),
             Some("LINE_CHANNEL_ACCESS_TOKEN")
@@ -1094,5 +1687,39 @@ mod tests {
         assert_eq!(config.selected_platform, "discord");
         assert!(config.discord.allow_direct_messages);
         assert_eq!(config.webhook.endpoint_path, "/webhook/message");
+    }
+
+    #[test]
+    fn bot_parse_tool_call_tags_supports_explicit_and_short_forms() {
+        let (cleaned, calls) = parse_tool_call_tags(
+            "Hi [TOOL_CALL:store_memory|fact=likes tea] [play_cue|name=smile]",
+        );
+
+        assert_eq!(cleaned, "Hi");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "store_memory");
+        assert_eq!(
+            calls[0].args.get("fact").map(String::as_str),
+            Some("likes tea")
+        );
+        assert_eq!(calls[1].name, "play_cue");
+        assert_eq!(calls[1].args.get("name").map(String::as_str), Some("smile"));
+    }
+
+    #[test]
+    fn bot_extract_translate_tags_strips_and_returns_translation() {
+        let (cleaned, translation) = extract_translate_tags("Hello [TRANSLATE:こんにちは]");
+
+        assert_eq!(cleaned, "Hello");
+        assert_eq!(translation.as_deref(), Some("こんにちは"));
+    }
+
+    #[test]
+    fn bot_strip_control_tags_removes_platform_unsafe_tags() {
+        let cleaned = strip_control_tags(
+            "Hello [ACTION:wave] <emotion>happy</emotion> [IMAGE_PROMPT:cat] world",
+        );
+
+        assert_eq!(cleaned, "Hello  happy  world");
     }
 }
