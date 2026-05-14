@@ -129,8 +129,8 @@
             "fetch_models": "取得可用模型",
             "fetching": "取得中...",
             "native_tools": {
-                "label": "工具調用",
-                "toggle": "啟用原生工具調用",
+                "label": "工具呼叫",
+                "toggle": "啟用原生工具呼叫",
                 "desc": "使用目前 model/provider 的原生 tool calling 介面，而不是偽造的 [TOOL_CALL:...] 標籤。"
             },
             "connection_test": {
@@ -857,27 +857,39 @@
                 },
                 "items": {
                     "get_time": {
+                        "label": "取得時間",
                         "description": "取得目前日期和時間。"
                     },
                     "capture_screen": {
+                        "label": "擷取螢幕",
                         "description": "取得目前螢幕截圖並返回簡潔的視覺觀察。需要先開啟螢幕視覺總開關。"
                     },
                     "play_cue": {
+                        "label": "播放動作",
                         "description": "觸發目前模型已設定的 Live2D cue。"
                     },
                     "set_background": {
+                        "label": "設定背景",
                         "description": "根據場景描述生成並切換新的背景。"
                     },
+                    "generate_image": {
+                        "label": "生成圖片",
+                        "description": "根據使用者要求生成圖片，並在 Kokoro Engine 用戶端中顯示。"
+                    },
                     "search_memory": {
+                        "label": "搜尋記憶",
                         "description": "搜尋關於使用者的已儲存記憶。"
                     },
                     "store_memory": {
+                        "label": "儲存記憶",
                         "description": "為後續對話儲存重要事實或細節。"
                     },
                     "forget_memory": {
+                        "label": "遺忘記憶",
                         "description": "當使用者要求遺忘時，尋找並刪除相關記憶。"
                     },
                     "send_notification": {
+                        "label": "傳送通知",
                         "description": "向使用者顯示桌面通知。"
                     }
                 }
