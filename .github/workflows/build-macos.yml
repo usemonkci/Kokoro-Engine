@@ -42,7 +42,14 @@ jobs:
       - name: Build macOS app (arm64)
         env:
           APPLE_SIGNING_IDENTITY: "-"
-        run: npm run tauri build -- --target aarch64-apple-darwin --bundles app,dmg
+        run: |
+          cargo_bin="$(rustup which cargo)"
+          rustc_bin="$(rustup which rustc)"
+          export CARGO="$cargo_bin"
+          export RUSTC="$rustc_bin"
+          export PATH="$(dirname "$cargo_bin"):$HOME/.cargo/bin:$PATH"
+          "$CARGO" metadata --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1 >/dev/null
+          npm run tauri build -- --target aarch64-apple-darwin --bundles app,dmg
 
       - name: List bundle output
         run: find src-tauri/target/aarch64-apple-darwin/release/bundle -type f | sort
