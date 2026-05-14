@@ -14,7 +14,7 @@ pub fn load_json_config<T: DeserializeOwned + Default>(path: &Path, label: &str)
     match std::fs::read_to_string(path) {
         Ok(content) => match serde_json::from_str::<T>(&content) {
             Ok(config) => {
-                tracing::info!(target: "config", "[{}] Loaded config from {}", label, path.display());
+                tracing::debug!(target: "config", "[{}] Loaded config from {}", label, path.display());
                 config
             }
             Err(e) => {

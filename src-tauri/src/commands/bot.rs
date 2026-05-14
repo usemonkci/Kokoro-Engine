@@ -21,7 +21,7 @@ use sha2::Sha256;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{Emitter, Manager, State};
@@ -155,6 +155,10 @@ impl BotRuntimeService {
 
     pub async fn update_config(&self, config: BotConfig) {
         *self.config.write().await = config;
+    }
+
+    pub async fn current_config(&self) -> BotConfig {
+        self.config.read().await.clone()
     }
 
     pub async fn is_discord_running(&self) -> bool {
@@ -298,12 +302,54 @@ fn legacy_telegram_config_path() -> PathBuf {
     app_data_dir().join("telegram_config.json")
 }
 
-fn load_legacy_telegram_config() -> Option<crate::telegram::TelegramConfig> {
-    let path = legacy_telegram_config_path();
-    if path.exists() {
-        Some(crate::telegram::load_config(&path))
-    } else {
-        None
+fn load_legacy_telegram_config(
+    path: &Path,
+) -> Result<Option<crate::telegram::TelegramConfig>, KokoroError> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let config = serde_json::from_str::<crate::telegram::TelegramConfig>(&content)
+                .map_err(|error| {
+                    KokoroError::Config(format!(
+                        "Failed to parse legacy Telegram config {}: {}",
+                        path.display(),
+                        error
+                    ))
+                })?;
+            tracing::debug!(target: "config", "[TELEGRAM] Loaded config from {}", path.display());
+            Ok(Some(config))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(KokoroError::Config(format!(
+            "Failed to read legacy Telegram config {}: {}",
+            path.display(),
+            error
+        ))),
+    }
+}
+
+fn telegram_config_has_user_values(config: &crate::telegram::TelegramConfig) -> bool {
+    config.enabled
+        || config
+            .bot_token
+            .as_ref()
+            .map_or(false, |token| !token.is_empty())
+        || !config.allowed_chat_ids.is_empty()
+        || config.send_voice_reply
+        || config
+            .character_id
+            .as_ref()
+            .map_or(false, |character_id| !character_id.is_empty())
+}
+
+fn remove_legacy_telegram_config(path: &Path) -> Result<(), KokoroError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(KokoroError::Config(format!(
+            "Failed to remove legacy Telegram config {}: {}",
+            path.display(),
+            error
+        ))),
     }
 }
 
@@ -325,23 +371,50 @@ pub(crate) fn normalize_bot_config_envs(mut config: BotConfig) -> BotConfig {
 
 pub(crate) fn load_bot_config() -> BotConfig {
     let path = bot_config_path();
-    let mut config: BotConfig = crate::config::load_json_config(&path, "BOT");
+    let legacy_path = legacy_telegram_config_path();
+    load_bot_config_from_paths(&path, &legacy_path)
+}
+
+fn load_bot_config_from_paths(path: &Path, legacy_path: &Path) -> BotConfig {
+    let bot_file_exists = path.exists();
+    let mut config: BotConfig = crate::config::load_json_config(path, "BOT");
     let mut migrated = false;
 
-    if let Some(legacy_telegram) = load_legacy_telegram_config() {
-        if !path.exists() || config.telegram == crate::telegram::TelegramConfig::default() {
-            config.telegram = legacy_telegram;
-            migrated = true;
+    if !bot_file_exists || !telegram_config_has_user_values(&config.telegram) {
+        match load_legacy_telegram_config(legacy_path) {
+            Ok(Some(legacy_telegram)) => {
+                config.telegram = legacy_telegram;
+                migrated = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    target: "bot",
+                    "failed to load legacy telegram_config.json for migration: {}",
+                    error
+                );
+            }
         }
     }
 
     let config = normalize_bot_config_envs(config);
     if migrated {
-        if let Err(error) = save_bot_config_file(&config) {
+        if let Err(error) = save_bot_config_file_to_path(path, &config) {
             tracing::warn!(
                 target: "bot",
                 "failed to migrate telegram_config.json into bot_config.json: {}",
                 error
+            );
+        } else if let Err(error) = remove_legacy_telegram_config(legacy_path) {
+            tracing::warn!(
+                target: "bot",
+                "failed to remove migrated telegram_config.json: {}",
+                error
+            );
+        } else {
+            tracing::info!(
+                target: "bot",
+                "migrated telegram_config.json into bot_config.json"
             );
         }
     }
@@ -350,8 +423,12 @@ pub(crate) fn load_bot_config() -> BotConfig {
 }
 
 pub(crate) fn save_bot_config_file(config: &BotConfig) -> Result<(), KokoroError> {
+    save_bot_config_file_to_path(&bot_config_path(), config)
+}
+
+fn save_bot_config_file_to_path(path: &Path, config: &BotConfig) -> Result<(), KokoroError> {
     let config = normalize_bot_config_envs(config.clone());
-    crate::config::save_json_config(&bot_config_path(), &config, "BOT")
+    crate::config::save_json_config(path, &config, "BOT")
 }
 
 fn has_secret(value: &Option<String>, env: &Option<String>) -> bool {
@@ -408,13 +485,14 @@ pub async fn get_bot_status(
     state: State<'_, TelegramService>,
     runtime: State<'_, BotRuntimeService>,
 ) -> Result<BotStatus, KokoroError> {
-    let config = load_bot_config();
+    let config = runtime.current_config().await;
+    let telegram_config = state.get_config().await;
     let discord_running = runtime.is_discord_running().await;
     let http_running = runtime.is_http_running().await;
     Ok(BotStatus {
         telegram: BotPlatformStatus {
-            enabled: config.telegram.enabled,
-            configured: config.telegram.resolve_bot_token().is_some(),
+            enabled: telegram_config.enabled,
+            configured: telegram_config.resolve_bot_token().is_some(),
             running: state.is_running().await,
         },
         discord: BotPlatformStatus {
@@ -1751,6 +1829,63 @@ mod tests {
             normalized.webhook.bearer_token_env.as_deref(),
             Some(WEBHOOK_BEARER_TOKEN_ENV)
         );
+    }
+
+    #[test]
+    fn load_bot_config_migrates_legacy_telegram_and_removes_old_file() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let bot_path = temp_dir.path().join("bot_config.json");
+        let legacy_path = temp_dir.path().join("telegram_config.json");
+        let legacy = crate::telegram::TelegramConfig {
+            enabled: true,
+            bot_token: Some("legacy-token".to_string()),
+            bot_token_env: Some("CUSTOM_TELEGRAM_ENV".to_string()),
+            allowed_chat_ids: vec![12345],
+            send_voice_reply: true,
+            character_id: Some("hiyori".to_string()),
+        };
+
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_string(&legacy).expect("legacy should serialize"),
+        )
+        .expect("write legacy config");
+
+        let config = load_bot_config_from_paths(&bot_path, &legacy_path);
+
+        assert!(bot_path.exists());
+        assert!(!legacy_path.exists());
+        assert_eq!(config.telegram.enabled, true);
+        assert_eq!(config.telegram.bot_token.as_deref(), Some("legacy-token"));
+        assert_eq!(
+            config.telegram.bot_token_env.as_deref(),
+            Some(TELEGRAM_BOT_TOKEN_ENV)
+        );
+        assert_eq!(config.telegram.allowed_chat_ids, vec![12345]);
+        assert_eq!(config.telegram.send_voice_reply, true);
+        assert_eq!(config.telegram.character_id.as_deref(), Some("hiyori"));
+
+        let saved: BotConfig = serde_json::from_str(
+            &std::fs::read_to_string(&bot_path).expect("read saved bot config"),
+        )
+        .expect("saved bot config should deserialize");
+        assert_eq!(saved.telegram, config.telegram);
+    }
+
+    #[test]
+    fn load_bot_config_keeps_existing_telegram_when_already_configured() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let bot_path = temp_dir.path().join("bot_config.json");
+        let legacy_path = temp_dir.path().join("telegram_config.json");
+        let mut current = BotConfig::default();
+        current.telegram.bot_token = Some("current-token".to_string());
+        save_bot_config_file_to_path(&bot_path, &current).expect("save current bot config");
+        std::fs::write(&legacy_path, "{not json").expect("write invalid legacy config");
+
+        let config = load_bot_config_from_paths(&bot_path, &legacy_path);
+
+        assert_eq!(config.telegram.bot_token.as_deref(), Some("current-token"));
+        assert!(legacy_path.exists());
     }
 
     #[test]
