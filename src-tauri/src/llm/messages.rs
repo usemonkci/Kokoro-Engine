@@ -8,6 +8,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestUserMessageArgs, ChatCompletionRequestUserMessageContent,
     ChatCompletionRequestUserMessageContentPart, FunctionCall, ImageUrlArgs,
 };
+use std::collections::HashSet;
 
 use crate::llm::provider::LlmChatMessage;
 
@@ -211,6 +212,97 @@ pub fn tool_result_message(
     ChatCompletionRequestMessage::Tool(message)
 }
 
+fn assistant_tool_call_ids(message: &ChatCompletionRequestMessage) -> Option<Vec<String>> {
+    let ChatCompletionRequestMessage::Assistant(message) = message else {
+        return None;
+    };
+
+    let tool_calls = message.tool_calls.as_ref()?;
+    if tool_calls.is_empty() {
+        return None;
+    }
+
+    let ids = tool_calls
+        .iter()
+        .map(|tool_call| match tool_call {
+            ChatCompletionMessageToolCalls::Function(tool_call) => tool_call.id.clone(),
+            ChatCompletionMessageToolCalls::Custom(tool_call) => tool_call.id.clone(),
+        })
+        .filter(|id| !id.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    Some(ids)
+}
+
+fn tool_message_call_id(message: &ChatCompletionRequestMessage) -> Option<&str> {
+    let ChatCompletionRequestMessage::Tool(message) = message else {
+        return None;
+    };
+    Some(message.tool_call_id.as_str())
+}
+
+pub fn sanitize_chat_tool_message_sequence(
+    messages: Vec<ChatCompletionRequestMessage>,
+) -> Vec<ChatCompletionRequestMessage> {
+    sanitize_llm_tool_message_sequence(messages.into_iter().map(LlmChatMessage::from).collect())
+        .into_iter()
+        .map(|message| message.message)
+        .collect()
+}
+
+pub fn sanitize_llm_tool_message_sequence(messages: Vec<LlmChatMessage>) -> Vec<LlmChatMessage> {
+    let mut sanitized = Vec::with_capacity(messages.len());
+    let mut messages = messages.into_iter().peekable();
+
+    while let Some(mut message) = messages.next() {
+        let Some(required_ids) = assistant_tool_call_ids(&message.message) else {
+            if tool_message_call_id(&message.message).is_none() {
+                sanitized.push(message);
+            }
+            continue;
+        };
+
+        if required_ids.is_empty() {
+            let text = extract_message_text(&message.message);
+            if !text.trim().is_empty() {
+                message.message = assistant_text_message(text);
+                sanitized.push(message);
+            }
+            continue;
+        }
+
+        let required_ids = required_ids.into_iter().collect::<HashSet<_>>();
+        let mut seen_ids = HashSet::new();
+        let mut tool_messages = Vec::new();
+
+        while let Some(next) = messages.peek() {
+            let Some(tool_call_id) = tool_message_call_id(&next.message) else {
+                break;
+            };
+            let tool_call_id = tool_call_id.to_string();
+            let next = messages.next().expect("peeked message should exist");
+
+            if required_ids.contains(&tool_call_id) && seen_ids.insert(tool_call_id) {
+                tool_messages.push(next);
+            }
+        }
+
+        if seen_ids.len() == required_ids.len() {
+            sanitized.push(message);
+            sanitized.extend(tool_messages);
+            continue;
+        }
+
+        let text = extract_message_text(&message.message);
+        if !text.trim().is_empty() {
+            message.message = assistant_text_message(text);
+            sanitized.push(message);
+        }
+    }
+
+    sanitized
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +412,110 @@ mod tests {
             }
             other => panic!("expected user-rendered context, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sanitize_tool_message_sequence_keeps_complete_native_tool_exchange() {
+        let messages = vec![
+            LlmChatMessage::from(user_text_message("before")),
+            LlmChatMessage::from(assistant_tool_calls_message(
+                None,
+                vec![(
+                    "call-1".to_string(),
+                    "lookup".to_string(),
+                    "{\"q\":\"x\"}".to_string(),
+                )],
+            )),
+            LlmChatMessage::from(tool_result_message("call-1", "result")),
+            LlmChatMessage::from(user_text_message("after")),
+        ];
+
+        let sanitized = sanitize_llm_tool_message_sequence(messages);
+
+        assert_eq!(sanitized.len(), 4);
+        assert!(matches!(
+            sanitized[1].message,
+            ChatCompletionRequestMessage::Assistant(_)
+        ));
+        assert!(matches!(
+            sanitized[2].message,
+            ChatCompletionRequestMessage::Tool(_)
+        ));
+    }
+
+    #[test]
+    fn sanitize_tool_message_sequence_drops_empty_incomplete_tool_call_history() {
+        let messages = vec![
+            LlmChatMessage::from(user_text_message("before")),
+            LlmChatMessage::from(assistant_tool_calls_message(
+                None,
+                vec![("call-1".to_string(), "lookup".to_string(), "{}".to_string())],
+            )),
+            LlmChatMessage::from(user_text_message("after")),
+        ];
+
+        let sanitized = sanitize_llm_tool_message_sequence(messages);
+
+        assert_eq!(sanitized.len(), 2);
+        assert_eq!(extract_message_text(&sanitized[0].message), "before");
+        assert_eq!(extract_message_text(&sanitized[1].message), "after");
+    }
+
+    #[test]
+    fn sanitize_tool_message_sequence_downgrades_textual_incomplete_tool_call_history() {
+        let messages = vec![LlmChatMessage {
+            message: assistant_tool_calls_message(
+                Some("I will check.".to_string()),
+                vec![("call-1".to_string(), "lookup".to_string(), "{}".to_string())],
+            ),
+            reasoning_content: Some("reasoning".to_string()),
+        }];
+
+        let sanitized = sanitize_llm_tool_message_sequence(messages);
+
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(extract_message_text(&sanitized[0].message), "I will check.");
+        assert_eq!(sanitized[0].reasoning_content.as_deref(), Some("reasoning"));
+        match &sanitized[0].message {
+            ChatCompletionRequestMessage::Assistant(message) => {
+                assert!(message.tool_calls.is_none());
+            }
+            other => panic!("expected assistant message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitize_tool_message_sequence_downgrades_tool_calls_with_empty_ids() {
+        let messages = vec![LlmChatMessage::from(assistant_tool_calls_message(
+            Some("checking".to_string()),
+            vec![("".to_string(), "lookup".to_string(), "{}".to_string())],
+        ))];
+
+        let sanitized = sanitize_llm_tool_message_sequence(messages);
+
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(extract_message_text(&sanitized[0].message), "checking");
+        match &sanitized[0].message {
+            ChatCompletionRequestMessage::Assistant(message) => {
+                assert!(message.tool_calls.is_none());
+            }
+            other => panic!("expected assistant message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitize_tool_message_sequence_drops_orphan_tool_messages() {
+        let messages = vec![
+            LlmChatMessage::from(user_text_message("before")),
+            LlmChatMessage::from(tool_result_message("call-1", "orphaned")),
+            LlmChatMessage::from(assistant_text_message("after")),
+        ];
+
+        let sanitized = sanitize_llm_tool_message_sequence(messages);
+
+        assert_eq!(sanitized.len(), 2);
+        assert_eq!(extract_message_text(&sanitized[0].message), "before");
+        assert_eq!(extract_message_text(&sanitized[1].message), "after");
     }
 }
 

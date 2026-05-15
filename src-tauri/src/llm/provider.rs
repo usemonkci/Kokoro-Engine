@@ -16,6 +16,10 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::pin::Pin;
 
+use crate::llm::messages::{
+    sanitize_chat_tool_message_sequence, sanitize_llm_tool_message_sequence,
+};
+
 // ── Common Parameters ──────────────────────────────────
 #[derive(Debug, Clone, Default)]
 pub struct LlmParams {
@@ -290,6 +294,7 @@ fn build_request(
     stream: bool,
 ) -> Result<CreateChatCompletionRequest, String> {
     let opts = options.unwrap_or_default();
+    let messages = sanitize_chat_tool_message_sequence(messages);
     let converted_tools = tools
         .filter(|tools| !tools.is_empty())
         .map(convert_tools)
@@ -336,6 +341,7 @@ fn build_rich_request_json(
     tools: Option<Vec<LlmToolDefinition>>,
     stream: bool,
 ) -> Result<serde_json::Value, String> {
+    let messages = sanitize_llm_tool_message_sequence(messages);
     let reasoning_content = messages
         .iter()
         .map(|message| message.reasoning_content.clone())
