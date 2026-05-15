@@ -258,7 +258,7 @@
                 "base_url": "기본 URL (선택사항)",
                 "ref_audio": {
                     "label": "참조 오디오 경로",
-                    "desc": "GPT-SoVITS 서버 컴퓨터의 참조 오디오 파일 경로"
+                    "desc": "음성 복제에 사용할 참조 오디오 파일 경로"
                 },
                 "prompt_text": {
                     "label": "참조 텍스트",
@@ -276,7 +276,17 @@
                 "model_placeholder": "선택 또는 입력...",
                 "default_hint": "서버 기본값을 사용하려면 비워두세요.",
                 "model_id": "모델 ID",
-                "model_path": "모델 경로 / 설정"
+                "model_path": "모델 경로 / 설정",
+                "project_path": "OmniVoice 프로젝트 경로",
+                "python_executable": "Python 실행 파일",
+                "generation_settings": "생성 설정(선택)",
+                "speed_factor": "속도",
+                "duration_seconds": "지속 시간(초)",
+                "inference_steps": "추론 단계",
+                "denoise": "노이즈 제거",
+                "guidance_scale": "가이던스 스케일(CFG)",
+                "preprocess_prompt": "프롬프트 전처리",
+                "postprocess_output": "출력 후처리"
             }
         },
         "stt": {

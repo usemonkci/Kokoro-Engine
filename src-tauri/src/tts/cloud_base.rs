@@ -115,6 +115,16 @@ impl TtsProvider for CloudTTSProvider {
         }]
     }
 
+    fn cache_key_salt(&self) -> Option<String> {
+        Some(
+            serde_json::json!({
+                "base_url": &self.base_url,
+                "model": self.model.as_deref(),
+            })
+            .to_string(),
+        )
+    }
+
     async fn is_available(&self) -> bool {
         !self.api_key.is_empty()
     }

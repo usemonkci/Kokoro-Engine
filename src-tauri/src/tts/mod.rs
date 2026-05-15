@@ -10,6 +10,7 @@ pub mod local_gpt_sovits;
 pub mod local_rvc;
 pub mod local_vits;
 pub mod manager;
+pub mod omnivoice;
 pub mod openai;
 pub mod queue;
 pub mod router;

@@ -209,12 +209,21 @@ function usesShortTtsVoiceId(providerId: string, ttsConfig?: TtsSystemConfig | n
     return provider?.provider_type === "edge_tts";
 }
 
+function isReferenceCloneTtsProvider(providerId: string, ttsConfig?: TtsSystemConfig | null): boolean {
+    const provider = ttsConfig?.providers.find(p => p.id === providerId);
+    return provider?.provider_type === "gpt_sovits" || provider?.provider_type === "omnivoice";
+}
+
 function normalizeTtsVoice(
     providerId: string,
     voice: string,
     voices: VoiceProfile[],
     ttsConfig?: TtsSystemConfig | null,
 ): string {
+    if (isReferenceCloneTtsProvider(providerId, ttsConfig)) {
+        return "";
+    }
+
     if (!voice) {
         if (providerId === "openai") {
             const provider = ttsConfig?.providers.find(p => p.id === providerId);

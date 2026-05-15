@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 /// LRU-based TTS audio cache with TTL expiration.
 ///
-/// Cache key is derived from (text, voice_id, provider_id, speed, pitch).
+/// Cache key is derived from (text, voice_id, provider_id, speed, pitch,
+/// provider/request salt).
 /// Thread safety is handled at the TtsService level via Arc<RwLock<TtsCache>>.
 pub struct TtsCache {
     entries: HashMap<CacheKey, CacheEntry>,
@@ -23,6 +24,8 @@ pub struct CacheKey {
     speed_centis: i32,
     /// Pitch × 100 as integer for hashing
     pitch_centis: i32,
+    /// Hash of provider-specific and per-request synthesis settings.
+    variant_hash: String,
 }
 
 struct CacheEntry {
@@ -37,6 +40,7 @@ impl CacheKey {
         provider_id: &str,
         speed: Option<f32>,
         pitch: Option<f32>,
+        variant_hash: Option<&str>,
     ) -> Self {
         Self {
             text: text.to_string(),
@@ -44,6 +48,7 @@ impl CacheKey {
             provider_id: provider_id.to_string(),
             speed_centis: (speed.unwrap_or(1.0) * 100.0) as i32,
             pitch_centis: (pitch.unwrap_or(1.0) * 100.0) as i32,
+            variant_hash: variant_hash.unwrap_or_default().to_string(),
         }
     }
 }

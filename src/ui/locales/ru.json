@@ -258,7 +258,7 @@
         "base_url": "Базовый URL (необязательно)",
         "ref_audio": {
           "label": "Путь к референсному аудио",
-          "desc": "Путь к референсному аудио на машине с сервером GPT-SoVITS"
+          "desc": "Путь к референсному аудиофайлу для клонирования голоса"
         },
         "prompt_text": {
           "label": "Текст подсказки",
@@ -276,7 +276,17 @@
         "model_placeholder": "Выберите или введите...",
         "default_hint": "Оставьте пустым, чтобы использовать значение сервера по умолчанию.",
         "model_id": "ID модели",
-        "model_path": "Путь к модели / конфигу"
+        "model_path": "Путь к модели / конфигу",
+        "project_path": "Путь к проекту OmniVoice",
+        "python_executable": "Исполняемый файл Python",
+        "generation_settings": "Параметры генерации (необязательно)",
+        "speed_factor": "Скорость",
+        "duration_seconds": "Длительность (сек.)",
+        "inference_steps": "Шаги вывода",
+        "denoise": "Шумоподавление",
+        "guidance_scale": "Шкала guidance (CFG)",
+        "preprocess_prompt": "Предобработка промпта",
+        "postprocess_output": "Постобработка вывода"
       }
     },
     "stt": {

@@ -118,6 +118,10 @@ impl TtsProvider for AzureTtsProvider {
         }]
     }
 
+    fn cache_key_salt(&self) -> Option<String> {
+        Some(format!("endpoint={}", self.endpoint))
+    }
+
     async fn is_available(&self) -> bool {
         !self.api_key.is_empty() && !self.endpoint.is_empty()
     }

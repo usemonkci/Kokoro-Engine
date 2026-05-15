@@ -258,7 +258,7 @@
                 "base_url": "API 地址 (可選)",
                 "ref_audio": {
                     "label": "參考音訊路徑",
-                    "desc": "GPT-SoVITS 伺服器上的參考音訊檔案路徑"
+                    "desc": "用於聲音克隆的參考音訊檔案路徑"
                 },
                 "prompt_text": {
                     "label": "參考文本",
@@ -276,7 +276,17 @@
                 "model_placeholder": "選擇或輸入...",
                 "default_hint": "留空以使用伺服器預設值。",
                 "model_id": "模型 ID",
-                "model_path": "模型路徑 / 設定"
+                "model_path": "模型路徑 / 設定",
+                "project_path": "OmniVoice 專案路徑",
+                "python_executable": "Python 執行檔",
+                "generation_settings": "生成設定（可選）",
+                "speed_factor": "速度",
+                "duration_seconds": "持續時間（秒）",
+                "inference_steps": "推理步數",
+                "denoise": "去噪",
+                "guidance_scale": "引導係數（CFG）",
+                "preprocess_prompt": "預處理提示",
+                "postprocess_output": "後處理輸出"
             }
         },
         "stt": {

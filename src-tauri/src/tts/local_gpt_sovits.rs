@@ -165,6 +165,21 @@ impl TtsProvider for LocalGPTSoVITSProvider {
         }]
     }
 
+    fn cache_key_salt(&self) -> Option<String> {
+        Some(
+            serde_json::json!({
+                "base_url": &self.base_url,
+                "ref_audio": self.default_ref_audio.as_deref(),
+                "prompt_text": self.default_prompt_text.as_deref(),
+                "prompt_lang": self.default_prompt_lang.as_deref(),
+                "text_lang": &self.default_text_lang,
+                "gpt_weights": self.gpt_weights.as_deref(),
+                "sovits_weights": self.sovits_weights.as_deref(),
+            })
+            .to_string(),
+        )
+    }
+
     async fn is_available(&self) -> bool {
         // Ping /tts endpoint — a running api_v2.py will respond (even 400 for missing params).
         // Any HTTP response means the server is reachable.

@@ -19,6 +19,38 @@ import type { ProviderConfigData } from "../../../core/types/mod";
 const stripProviderVoiceId = (providerId: string, voiceId: string) =>
     voiceId.startsWith(`${providerId}_`) ? voiceId.slice(providerId.length + 1) : voiceId;
 
+const isReferenceCloneProviderType = (providerType?: string) =>
+    providerType === "gpt_sovits" || providerType === "omnivoice";
+
+const providerTypeLabel = (providerType: string) =>
+    providerType === "omnivoice" ? "OmniVoice" : providerType.replace("_", " ");
+
+const readExtraInputValue = (extra: Record<string, unknown> | undefined, key: string) => {
+    const raw = extra?.[key];
+    return typeof raw === "number" || typeof raw === "string" ? String(raw) : "";
+};
+
+const readExtraNumber = (extra: Record<string, unknown> | undefined, key: string, fallback: number) => {
+    const raw = extra?.[key];
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    if (typeof raw === "string" && raw.trim()) {
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return fallback;
+};
+
+const readExtraBool = (extra: Record<string, unknown> | undefined, key: string, fallback: boolean) => {
+    const raw = extra?.[key];
+    if (typeof raw === "boolean") return raw;
+    if (typeof raw === "string") {
+        const normalized = raw.trim().toLowerCase();
+        if (["true", "1", "yes", "on"].includes(normalized)) return true;
+        if (["false", "0", "no", "off"].includes(normalized)) return false;
+    }
+    return fallback;
+};
+
 export interface TtsTabProps {
     ttsConfig: TtsSystemConfig | null;
     onTtsConfigChange: (config: TtsSystemConfig) => void;
@@ -52,7 +84,7 @@ export default function TtsTab({
     const [scannedModels, setScannedModels] = useState<Record<string, GptSovitsModels>>({});
     const { t } = useTranslation();
     const activeProvider = ttsConfig?.providers.find(p => p.id === ttsProviderId);
-    const isActiveGptSovits = activeProvider?.provider_type === "gpt_sovits";
+    const isActiveReferenceCloneProvider = isReferenceCloneProviderType(activeProvider?.provider_type);
     const isActiveOpenAI = activeProvider?.provider_type === "openai";
     const activeVoices = voices.filter(v => v.provider_id === ttsProviderId);
     const shouldUseShortVoiceId = useCallback((providerId: string) => {
@@ -170,6 +202,16 @@ export default function TtsTab({
         onTtsConfigChange({ ...ttsConfig, providers: newProviders });
     };
 
+    const updateProviderExtra = (index: number, provider: ProviderConfigData, key: string, value: unknown) => {
+        const nextExtra = { ...(provider.extra || {}) };
+        if (value === "" || value === null || value === undefined) {
+            delete nextExtra[key];
+        } else {
+            nextExtra[key] = value;
+        }
+        updateProviderConfig(index, { extra: nextExtra });
+    };
+
     const removeProvider = (index: number) => {
         if (!ttsConfig) return;
         if (ttsConfig.providers[index].id === "browser") return;
@@ -227,8 +269,8 @@ export default function TtsTab({
                     />
                 </div>
 
-                {/* Voice Selector — hidden for GPT-SoVITS (voice is determined by model + ref audio) */}
-                {!isActiveGptSovits && (
+                {/* Voice Selector — hidden for reference-clone providers */}
+                {!isActiveReferenceCloneProvider && (
                     <div>
                         <label className={labelClasses}>{t("settings.tts.active_settings.voice")}</label>
                         {isActiveOpenAI ? (
@@ -574,6 +616,161 @@ export default function TtsTab({
                                             </>
                                         )}
 
+                                        {/* OmniVoice Specific Fields */}
+                                        {provider.provider_type === "omnivoice" && (
+                                            <>
+                                                <div>
+                                                    <label className={labelClasses}>{t("settings.tts.fields.project_path")}</label>
+                                                    <input
+                                                        type="text"
+                                                        value={(provider.extra?.project_path as string) || ""}
+                                                        onChange={e => updateProviderConfig(index, {
+                                                            extra: { ...provider.extra, project_path: e.target.value }
+                                                        })}
+                                                        placeholder="D:/path/to/OmniVoice"
+                                                        className={clsx(inputClasses, "font-mono text-xs")}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClasses}>{t("settings.tts.fields.python_executable")}</label>
+                                                    <input
+                                                        type="text"
+                                                        value={(provider.extra?.python_executable as string) || ""}
+                                                        onChange={e => updateProviderConfig(index, {
+                                                            extra: { ...provider.extra, python_executable: e.target.value }
+                                                        })}
+                                                        placeholder="D:/path/to/OmniVoice/.venv/Scripts/python.exe"
+                                                        className={clsx(inputClasses, "font-mono text-xs")}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClasses}>{t("settings.tts.fields.ref_audio.label")} <span className="text-red-400">*</span></label>
+                                                    <input
+                                                        type="text"
+                                                        value={(provider.extra?.ref_audio_path as string) || ""}
+                                                        onChange={e => updateProviderConfig(index, {
+                                                            extra: { ...provider.extra, ref_audio_path: e.target.value }
+                                                        })}
+                                                        placeholder="D:/path/to/reference.wav"
+                                                        className={clsx(inputClasses, "font-mono text-xs")}
+                                                    />
+                                                    <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+                                                        {t("settings.tts.fields.ref_audio.desc")}
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <label className={labelClasses}>{t("settings.tts.fields.prompt_text.label")} <span className="text-[var(--color-text-muted)]">{t("settings.tts.fields.prompt_text.optional")}</span></label>
+                                                    <input
+                                                        type="text"
+                                                        value={(provider.extra?.prompt_text as string) || ""}
+                                                        onChange={e => updateProviderConfig(index, {
+                                                            extra: { ...provider.extra, prompt_text: e.target.value }
+                                                        })}
+                                                        placeholder={t("settings.tts.fields.prompt_text.placeholder")}
+                                                        className={clsx(inputClasses, "text-xs")}
+                                                    />
+                                                </div>
+                                                <div className="space-y-3 pt-3 border-t border-[var(--color-border)]/60">
+                                                    <div className={clsx(labelClasses, "mb-0")}>
+                                                        {t("settings.tts.fields.generation_settings")}
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        <div>
+                                                            <label className={labelClasses}>{t("settings.tts.fields.speed_factor")}</label>
+                                                            <input
+                                                                type="number"
+                                                                min="0.5"
+                                                                max="1.5"
+                                                                step="0.05"
+                                                                value={readExtraInputValue(provider.extra, "speed")}
+                                                                onChange={e => updateProviderExtra(index, provider, "speed", e.target.value === "" ? "" : Number(e.target.value))}
+                                                                placeholder="1.0"
+                                                                className={clsx(inputClasses, "number-input-no-spinner font-mono text-xs")}
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className={labelClasses}>{t("settings.tts.fields.duration_seconds")}</label>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.1"
+                                                                value={readExtraInputValue(provider.extra, "duration")}
+                                                                onChange={e => updateProviderExtra(index, provider, "duration", e.target.value === "" ? "" : Number(e.target.value))}
+                                                                placeholder="0"
+                                                                className={clsx(inputClasses, "number-input-no-spinner font-mono text-xs")}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <label className={labelClasses}>{t("settings.tts.fields.inference_steps")}</label>
+                                                        <div className="flex items-center gap-3">
+                                                            <input
+                                                                type="range"
+                                                                min="4"
+                                                                max="64"
+                                                                step="1"
+                                                                value={readExtraNumber(provider.extra, "num_step", 32)}
+                                                                onChange={e => updateProviderExtra(index, provider, "num_step", Number(e.target.value))}
+                                                                className="flex-1 accent-[var(--color-accent)]"
+                                                            />
+                                                            <input
+                                                                type="number"
+                                                                min="4"
+                                                                max="64"
+                                                                step="1"
+                                                                value={readExtraNumber(provider.extra, "num_step", 32)}
+                                                                onChange={e => updateProviderExtra(index, provider, "num_step", e.target.value === "" ? "" : Number(e.target.value))}
+                                                                className={clsx(inputClasses, "number-input-no-spinner w-20 font-mono text-xs text-right")}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <label className={labelClasses}>{t("settings.tts.fields.guidance_scale")}</label>
+                                                        <div className="flex items-center gap-3">
+                                                            <input
+                                                                type="range"
+                                                                min="0"
+                                                                max="4"
+                                                                step="0.1"
+                                                                value={readExtraNumber(provider.extra, "guidance_scale", 2)}
+                                                                onChange={e => updateProviderExtra(index, provider, "guidance_scale", Number(e.target.value))}
+                                                                className="flex-1 accent-[var(--color-accent)]"
+                                                            />
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                max="4"
+                                                                step="0.1"
+                                                                value={readExtraNumber(provider.extra, "guidance_scale", 2)}
+                                                                onChange={e => updateProviderExtra(index, provider, "guidance_scale", e.target.value === "" ? "" : Number(e.target.value))}
+                                                                className={clsx(inputClasses, "number-input-no-spinner w-20 font-mono text-xs text-right")}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                                        {[
+                                                            ["denoise", t("settings.tts.fields.denoise"), readExtraBool(provider.extra, "denoise", true)],
+                                                            ["preprocess_prompt", t("settings.tts.fields.preprocess_prompt"), readExtraBool(provider.extra, "preprocess_prompt", true)],
+                                                            ["postprocess_output", t("settings.tts.fields.postprocess_output"), readExtraBool(provider.extra, "postprocess_output", true)],
+                                                        ].map(([key, label, checked]) => (
+                                                            <label
+                                                                key={key as string}
+                                                                className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]"
+                                                            >
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={checked as boolean}
+                                                                    onChange={e => updateProviderExtra(index, provider, key as string, e.target.checked)}
+                                                                    className="accent-[var(--color-accent)]"
+                                                                />
+                                                                <span>{label as string}</span>
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+
                                         {/* Model */}
                                         {(provider.provider_type === "openai" || provider.provider_type === "azure") && (
                                             <div>
@@ -657,13 +854,13 @@ export default function TtsTab({
                 {/* Add Provider Dropdown */}
                 <div className="pt-2">
                     <div className="grid grid-cols-2 gap-2">
-                        {["openai", "edge_tts", "local_vits", "gpt_sovits", "azure", "elevenlabs"].map(type => (
+                        {["openai", "edge_tts", "local_vits", "gpt_sovits", "omnivoice", "azure", "elevenlabs"].map(type => (
                             <button
                                 key={type}
                                 onClick={() => addProvider(type)}
                                 className="px-3 py-2 text-xs border border-[var(--color-border)] rounded hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors uppercase tracking-wider"
                             >
-                                {t("settings.tts.manage_providers.add")} {type.replace("_", " ")}
+                                {t("settings.tts.manage_providers.add")} {providerTypeLabel(type)}
                             </button>
                         ))}
                     </div>

@@ -134,6 +134,28 @@ impl Default for TtsParams {
     }
 }
 
+impl TtsParams {
+    /// Stable salt for cache keys derived from per-request extra params.
+    pub fn extra_cache_key_salt(&self) -> Option<String> {
+        let extra = self.extra_params.as_ref()?;
+        if extra.is_empty() {
+            return None;
+        }
+
+        let mut keys: Vec<_> = extra.keys().collect();
+        keys.sort();
+
+        let mut map = serde_json::Map::new();
+        for key in keys {
+            if let Some(value) = extra.get(key) {
+                map.insert(key.clone(), value.clone());
+            }
+        }
+
+        Some(serde_json::Value::Object(map).to_string())
+    }
+}
+
 // ── Provider Trait ──────────────────────────────────────
 
 #[async_trait]
@@ -146,6 +168,12 @@ pub trait TtsProvider: Send + Sync {
 
     /// List available voices for this provider
     fn voices(&self) -> Vec<VoiceProfile>;
+
+    /// Optional stable salt for cache keys derived from provider-specific
+    /// settings that affect audio output.
+    fn cache_key_salt(&self) -> Option<String> {
+        None
+    }
 
     /// Check if the provider is currently reachable / operational
     async fn is_available(&self) -> bool;

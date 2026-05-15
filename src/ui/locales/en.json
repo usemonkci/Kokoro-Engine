@@ -258,7 +258,7 @@
                 "base_url": "Base URL (Optional)",
                 "ref_audio": {
                     "label": "Reference Audio Path",
-                    "desc": "Path to reference audio on the GPT-SoVITS server machine"
+                    "desc": "Path to the reference audio file used for voice cloning"
                 },
                 "prompt_text": {
                     "label": "Prompt Text",
@@ -276,7 +276,17 @@
                 "model_placeholder": "Select or type...",
                 "default_hint": "Leave empty to use server default.",
                 "model_id": "Model ID",
-                "model_path": "Model Path / Config"
+                "model_path": "Model Path / Config",
+                "project_path": "OmniVoice Project Path",
+                "python_executable": "Python Executable",
+                "generation_settings": "Generation Settings (Optional)",
+                "speed_factor": "Speed",
+                "duration_seconds": "Duration (seconds)",
+                "inference_steps": "Inference Steps",
+                "denoise": "Denoise",
+                "guidance_scale": "Guidance Scale (CFG)",
+                "preprocess_prompt": "Preprocess Prompt",
+                "postprocess_output": "Postprocess Output"
             }
         },
         "stt": {

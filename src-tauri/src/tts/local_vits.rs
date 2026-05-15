@@ -88,6 +88,16 @@ impl TtsProvider for LocalVITSProvider {
         }]
     }
 
+    fn cache_key_salt(&self) -> Option<String> {
+        Some(
+            serde_json::json!({
+                "endpoint": &self.endpoint,
+                "model_id": self.model_id.as_deref(),
+            })
+            .to_string(),
+        )
+    }
+
     async fn is_available(&self) -> bool {
         let url = format!("{}/health", self.endpoint);
         match self

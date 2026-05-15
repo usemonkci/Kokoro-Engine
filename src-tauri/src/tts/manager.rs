@@ -8,6 +8,7 @@ use super::interface::{ProviderCapabilities, TtsError, TtsParams, TtsProvider, V
 use super::local_gpt_sovits::LocalGPTSoVITSProvider;
 use super::local_rvc::LocalRVCProvider;
 use super::local_vits::LocalVITSProvider;
+use super::omnivoice::OmniVoiceProvider;
 use super::openai::OpenAITtsProvider;
 use super::queue::TtsQueue;
 use super::router::TtsRouter;
@@ -16,6 +17,7 @@ use super::voice_registry::VoiceRegistry;
 use crate::hooks::{HookEvent, HookPayload, HookRuntime, TtsHookPayload};
 use futures::StreamExt;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -141,6 +143,9 @@ impl TtsService {
             }
             "gpt_sovits" => LocalGPTSoVITSProvider::from_config(config)
                 .map(|p| Box::new(p) as Box<dyn TtsProvider>),
+            "omnivoice" => {
+                OmniVoiceProvider::from_config(config).map(|p| Box::new(p) as Box<dyn TtsProvider>)
+            }
             "local_rvc" => {
                 LocalRVCProvider::from_config(config).map(|p| Box::new(p) as Box<dyn TtsProvider>)
             }
@@ -243,6 +248,13 @@ impl TtsService {
                 let provider_id = provider_id_route.clone();
 
                 async move {
+                    let cache_salt = {
+                        let providers = service.providers.read().await;
+                        let provider = providers
+                            .get(&provider_id)
+                            .ok_or_else(|| format!("Provider {} not found", provider_id))?;
+                        cache_variant_hash(provider.as_ref(), &params)
+                    };
                     let voice_id = params.voice.clone().unwrap_or_default();
                     let cache_key = CacheKey::new(
                         &sentence,
@@ -250,6 +262,7 @@ impl TtsService {
                         &provider_id,
                         params.speed,
                         params.pitch,
+                        cache_salt.as_deref(),
                     );
 
                     // 1. Check cache
@@ -524,6 +537,30 @@ impl TtsService {
         let mut cache = self.cache.write().await;
         cache.clear();
     }
+}
+
+fn cache_variant_hash(provider: &dyn TtsProvider, params: &TtsParams) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if let Some(salt) = provider.cache_key_salt() {
+        if !salt.is_empty() {
+            parts.push(format!("provider:{salt}"));
+        }
+    }
+
+    if let Some(salt) = params.extra_cache_key_salt() {
+        if !salt.is_empty() {
+            parts.push(format!("params:{salt}"));
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(parts.join("\n").as_bytes());
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 fn split_sentences(text: &str) -> Vec<&str> {

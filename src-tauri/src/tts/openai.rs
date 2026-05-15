@@ -113,6 +113,10 @@ impl TtsProvider for OpenAITtsProvider {
             .collect()
     }
 
+    fn cache_key_salt(&self) -> Option<String> {
+        Some(format!("base_url={};model={}", self.base_url, self.model))
+    }
+
     async fn is_available(&self) -> bool {
         !self.api_key.is_empty()
     }

@@ -159,6 +159,18 @@ body,
   /* Chrome/Safari/WebKit */
 }
 
+/* ── Number Input Without Spinner ───────────────────────── */
+.number-input-no-spinner {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.number-input-no-spinner::-webkit-outer-spin-button,
+.number-input-no-spinner::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
 /* ── Focus Ring ─────────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid var(--color-accent);
