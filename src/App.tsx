@@ -29,6 +29,7 @@ registerCoreComponents();
 const CHAT_PANEL_MIN_WIDTH = 350;
 const CHAT_PANEL_RESIZE_GUTTER = 160;
 const CHAT_PANEL_WIDTH_CSS_VAR = "--kokoro-chat-panel-width";
+const HOME_LIVE2D_HORIZONTAL_OFFSET_STORAGE_KEY = "kokoro_live2d_home_horizontal_offset";
 
 function clampChatPanelWidth(width: number): number {
   const roundedWidth = Math.round(width);
@@ -74,6 +75,8 @@ function createLayout(options: {
             displayMode: options.mode,
             gazeTracking: options.gazeTracking,
             maxFps: options.renderFps,
+            enableHorizontalDrag: true,
+            horizontalOffsetStorageKey: HOME_LIVE2D_HORIZONTAL_OFFSET_STORAGE_KEY,
           }
         },
         {

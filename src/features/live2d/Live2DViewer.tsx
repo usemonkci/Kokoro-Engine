@@ -34,6 +34,22 @@ export interface Live2DViewerHandle {
 
 export type Live2DDisplayMode = "full" | "upper" | "upper-thigh";
 
+const RIGHT_DRAG_HOLD_MS = 250;
+const RIGHT_DRAG_MOVE_THRESHOLD_PX = 3;
+
+function readStoredHorizontalOffset(storageKey?: string): number {
+    if (!storageKey || typeof window === "undefined") return 0;
+
+    const value = Number(window.localStorage.getItem(storageKey));
+    return Number.isFinite(value) ? value : 0;
+}
+
+function saveStoredHorizontalOffset(storageKey: string | undefined, offset: number) {
+    if (!storageKey || typeof window === "undefined") return;
+
+    window.localStorage.setItem(storageKey, String(Math.round(offset)));
+}
+
 export interface Live2DViewerProps {
     /** URL to the .model3.json file */
     modelUrl: string;
@@ -60,18 +76,25 @@ export interface Live2DViewerProps {
     maxFps?: number;
     /** Callback when model is loaded and sized */
     onModelLoaded?: (bounds: { width: number; height: number }) => void;
+    /** Enables right-button long-press horizontal model dragging. */
+    enableHorizontalDrag?: boolean;
+    /** Optional localStorage key used to persist horizontal drag offset. */
+    horizontalOffsetStorageKey?: string;
 }
 
 // ── Component ──────────────────────────────────────
 
 const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
-    ({ modelUrl, modelPath = null, controller, onHitAreaTap, className, backgroundAlpha = 0, displayMode = "full", gazeTracking = true, fixedSize, scaleMultiplier = 1, maxFps = 60, onModelLoaded }, ref) => {
+    ({ modelUrl, modelPath = null, controller, onHitAreaTap, className, backgroundAlpha = 0, displayMode = "full", gazeTracking = true, fixedSize, scaleMultiplier = 1, maxFps = 60, onModelLoaded, enableHorizontalDrag = false, horizontalOffsetStorageKey }, ref) => {
         const containerRef = useRef<HTMLDivElement>(null);
         const appRef = useRef<PIXI.Application | null>(null);
         const modelRef = useRef<Live2DModel | null>(null);
         const gazeTrackingRef = useRef(gazeTracking);
         const fitModelRef = useRef<(() => void) | null>(null);
         const scaleMultiplierRef = useRef(scaleMultiplier);
+        const horizontalDragEnabledRef = useRef(enableHorizontalDrag);
+        const horizontalOffsetStorageKeyRef = useRef(horizontalOffsetStorageKey);
+        const horizontalOffsetRef = useRef(readStoredHorizontalOffset(horizontalOffsetStorageKey));
 
         // Internal controller if none provided
         const internalControllerRef = useRef<Live2DController | null>(null);
@@ -173,6 +196,15 @@ const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         }, [gazeTracking]);
 
         useEffect(() => {
+            horizontalDragEnabledRef.current = enableHorizontalDrag;
+            horizontalOffsetStorageKeyRef.current = horizontalOffsetStorageKey;
+            horizontalOffsetRef.current = enableHorizontalDrag
+                ? readStoredHorizontalOffset(horizontalOffsetStorageKey)
+                : 0;
+            fitModelRef.current?.();
+        }, [enableHorizontalDrag, horizontalOffsetStorageKey]);
+
+        useEffect(() => {
             scaleMultiplierRef.current = scaleMultiplier;
             fitModelRef.current?.();
         }, [scaleMultiplier]);
@@ -218,6 +250,7 @@ const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
             let cancelled = false;
             let tick: ((delta: number) => void) | null = null;
             let syncTickerState: (() => void) | null = null;
+            let removeHorizontalDragListeners: (() => void) | null = null;
 
             // Clear PIXI texture cache to avoid stale error results from previous loads
             PIXI.utils.clearTextureCache();
@@ -242,6 +275,33 @@ const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
                     // Capture original dimensions for consistent scaling
                     const originalWidth = model.width;
                     const originalHeight = model.height;
+                    let fittedBaseX = 0;
+
+                    const clampHorizontalOffset = (baseX: number, offset: number) => {
+                        if (!horizontalDragEnabledRef.current) return 0;
+                        if (app.screen.width <= 0 || model.width <= 0) return offset;
+
+                        const minVisibleWidth = Math.min(
+                            Math.max(app.screen.width * 0.12, 80),
+                            model.width,
+                            220
+                        );
+                        const minOffset = minVisibleWidth - model.width - baseX;
+                        const maxOffset = app.screen.width - minVisibleWidth - baseX;
+                        return Math.min(Math.max(offset, minOffset), maxOffset);
+                    };
+
+                    const setHorizontalOffset = (offset: number) => {
+                        const nextOffset = clampHorizontalOffset(fittedBaseX, offset);
+                        horizontalOffsetRef.current = nextOffset;
+                        model.x = fittedBaseX + nextOffset;
+                        return nextOffset;
+                    };
+
+                    const setModelBaseX = (baseX: number) => {
+                        fittedBaseX = baseX;
+                        setHorizontalOffset(horizontalOffsetRef.current);
+                    };
 
                     // Scale model to fit container based on display mode
                     const fitModel = () => {
@@ -263,7 +323,7 @@ const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
                             scale = Math.min(fitScaleX, fitScaleY) * scaleMultiplierRef.current;
                             model.scale.set(scale);
                             // Center both axes
-                            model.x = (app.screen.width - model.width) / 2;
+                            setModelBaseX((app.screen.width - model.width) / 2);
                             model.y = (app.screen.height - model.height) / 2;
                             return;
                         }
@@ -272,19 +332,19 @@ const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
                             case "upper":
                                 scale = Math.min(scaleX, scaleY) * 1.5 * scaleMultiplierRef.current;
                                 model.scale.set(scale);
-                                model.x = (app.screen.width - model.width) / 2;
+                                setModelBaseX((app.screen.width - model.width) / 2);
                                 model.y = app.screen.height * 0.05;
                                 break;
                             case "upper-thigh":
                                 scale = Math.min(scaleX, scaleY) * 1.25 * scaleMultiplierRef.current;
                                 model.scale.set(scale);
-                                model.x = (app.screen.width - model.width) / 2;
+                                setModelBaseX((app.screen.width - model.width) / 2);
                                 model.y = app.screen.height * 0.03;
                                 break;
                             default:
                                 scale = Math.min(scaleX, scaleY) * scaleMultiplierRef.current;
                                 model.scale.set(scale);
-                                model.x = (app.screen.width - model.width) / 2;
+                                setModelBaseX((app.screen.width - model.width) / 2);
                                 model.y = (app.screen.height - model.height) / 2;
                                 break;
                         }
@@ -409,6 +469,148 @@ const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
                         }
                     });
 
+                    const canvas = app.view as HTMLCanvasElement;
+                    const clientToGlobal = (clientX: number, clientY: number) => {
+                        const rect = canvas.getBoundingClientRect();
+                        if (rect.width <= 0 || rect.height <= 0) {
+                            return { x: 0, y: 0 };
+                        }
+
+                        return {
+                            x: ((clientX - rect.left) / rect.width) * app.screen.width,
+                            y: ((clientY - rect.top) / rect.height) * app.screen.height,
+                        };
+                    };
+                    const isPointOnModel = (clientX: number, clientY: number) => {
+                        const { x, y } = clientToGlobal(clientX, clientY);
+                        const bounds = model.getBounds();
+                        return (
+                            x >= bounds.x &&
+                            x <= bounds.x + bounds.width &&
+                            y >= bounds.y &&
+                            y <= bounds.y + bounds.height
+                        );
+                    };
+
+                    let rightDragPointerId: number | null = null;
+                    let rightDragTimer: ReturnType<typeof setTimeout> | null = null;
+                    let rightDragActive = false;
+                    let rightDragStartClientX = 0;
+                    let rightDragLatestClientX = 0;
+                    let rightDragStartOffset = 0;
+
+                    const clearRightDragTimer = () => {
+                        if (rightDragTimer) {
+                            clearTimeout(rightDragTimer);
+                            rightDragTimer = null;
+                        }
+                    };
+                    const applyRightDrag = (clientX: number) => {
+                        setHorizontalOffset(rightDragStartOffset + clientX - rightDragStartClientX);
+                    };
+                    const activateRightDrag = (clientX: number) => {
+                        if (rightDragActive) return;
+
+                        clearRightDragTimer();
+                        rightDragStartClientX = clientX;
+                        rightDragStartOffset = horizontalOffsetRef.current;
+                        rightDragActive = true;
+                        container.style.cursor = "ew-resize";
+                    };
+                    const endRightDrag = (event: PointerEvent) => {
+                        if (rightDragPointerId !== event.pointerId) return;
+
+                        event.preventDefault();
+                        event.stopPropagation();
+                        clearRightDragTimer();
+
+                        if (rightDragActive) {
+                            applyRightDrag(event.clientX);
+                            saveStoredHorizontalOffset(
+                                horizontalOffsetStorageKeyRef.current,
+                                horizontalOffsetRef.current
+                            );
+                        }
+
+                        try {
+                            if (container.hasPointerCapture(event.pointerId)) {
+                                container.releasePointerCapture(event.pointerId);
+                            }
+                        } catch {
+                            // Pointer capture can already be released by the browser.
+                        }
+
+                        rightDragPointerId = null;
+                        rightDragActive = false;
+                        container.style.cursor = "";
+                    };
+                    const handleRightDragPointerDown = (event: PointerEvent) => {
+                        if (!horizontalDragEnabledRef.current || event.button !== 2 || rightDragPointerId !== null) return;
+                        if (!isPointOnModel(event.clientX, event.clientY)) return;
+
+                        event.preventDefault();
+                        event.stopPropagation();
+
+                        rightDragPointerId = event.pointerId;
+                        rightDragStartClientX = event.clientX;
+                        rightDragLatestClientX = event.clientX;
+                        rightDragStartOffset = horizontalOffsetRef.current;
+
+                        try {
+                            container.setPointerCapture(event.pointerId);
+                        } catch {
+                            // Pointer capture is best-effort; document-level pointer events still bubble here.
+                        }
+
+                        rightDragTimer = setTimeout(() => {
+                            rightDragTimer = null;
+                            if (rightDragPointerId !== event.pointerId) return;
+
+                            activateRightDrag(rightDragLatestClientX);
+                        }, RIGHT_DRAG_HOLD_MS);
+                    };
+                    const handleRightDragPointerMove = (event: PointerEvent) => {
+                        if (rightDragPointerId !== event.pointerId) return;
+
+                        event.preventDefault();
+                        event.stopPropagation();
+                        rightDragLatestClientX = event.clientX;
+
+                        if (!rightDragActive) {
+                            const dx = event.clientX - rightDragStartClientX;
+                            if (Math.abs(dx) < RIGHT_DRAG_MOVE_THRESHOLD_PX) return;
+
+                            activateRightDrag(event.clientX);
+                            return;
+                        }
+
+                        if (rightDragActive) {
+                            applyRightDrag(event.clientX);
+                        }
+                    };
+                    const handleRightDragContextMenu = (event: MouseEvent) => {
+                        if (!horizontalDragEnabledRef.current) return;
+                        if (rightDragPointerId === null && !isPointOnModel(event.clientX, event.clientY)) return;
+
+                        event.preventDefault();
+                        event.stopPropagation();
+                    };
+
+                    container.addEventListener("pointerdown", handleRightDragPointerDown, true);
+                    container.addEventListener("pointermove", handleRightDragPointerMove, true);
+                    container.addEventListener("pointerup", endRightDrag, true);
+                    container.addEventListener("pointercancel", endRightDrag, true);
+                    container.addEventListener("contextmenu", handleRightDragContextMenu, true);
+                    removeHorizontalDragListeners = () => {
+                        clearRightDragTimer();
+                        container.style.cursor = "";
+                        container.removeEventListener("pointerdown", handleRightDragPointerDown, true);
+                        container.removeEventListener("pointermove", handleRightDragPointerMove, true);
+                        container.removeEventListener("pointerup", endRightDrag, true);
+                        container.removeEventListener("pointercancel", endRightDrag, true);
+                        container.removeEventListener("contextmenu", handleRightDragContextMenu, true);
+                    };
+
                     app.stage.addChild(model as unknown as PIXI.DisplayObject);
 
                     // Add update loop
@@ -447,6 +649,7 @@ const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
                     modelRef.current = null;
                 }
                 fitModelRef.current = null;
+                removeHorizontalDragListeners?.();
 
                 app.stage.off("pointermove", handlePointerMove);
                 if (syncTickerState) {
