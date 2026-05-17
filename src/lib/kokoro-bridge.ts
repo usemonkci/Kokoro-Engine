@@ -1366,57 +1366,6 @@ export async function renameConversation(id: string, title: string): Promise<voi
     });
 }
 
-// ── Singing (RVC Voice Conversion) ──────────────────────
-
-export interface RvcModelInfo {
-    name: string;
-    description?: string;
-}
-
-export interface SingingResult {
-    output_path: string;
-    duration_secs: number;
-}
-
-export interface SingingProgressEvent {
-    stage: "reading" | "converting" | "done";
-    progress: number;
-    output_path?: string;
-}
-
-export async function checkRvcStatus(): Promise<boolean> {
-    return invoke<boolean>("check_rvc_status");
-}
-
-export async function listRvcModels(): Promise<RvcModelInfo[]> {
-    return invoke<RvcModelInfo[]>("list_rvc_models");
-}
-
-export async function convertSinging(
-    audioPath: string,
-    modelName?: string,
-    pitchShift?: number,
-    separateVocals?: boolean,
-    // Advanced RVC params
-    f0Method?: string,
-    indexPath?: string,
-    indexRate?: number,
-): Promise<SingingResult> {
-    return invoke<SingingResult>("convert_singing", {
-        audioPath,
-        modelName,
-        pitchShift,
-        separateVocals,
-        f0Method,
-        indexPath,
-        indexRate,
-    });
-}
-
-export async function onSingingProgress(callback: (event: SingingProgressEvent) => void): Promise<UnlistenFn> {
-    return listen<SingingProgressEvent>("singing:progress", (event) => callback(event.payload));
-}
-
 // ── Bot Integrations ───────────────────────────────
 
 export type BotPlatformId = "telegram" | "discord" | "line" | "webhook";

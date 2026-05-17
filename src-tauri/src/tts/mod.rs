@@ -7,7 +7,6 @@ pub mod edge;
 pub mod emotion_tts;
 pub mod interface;
 pub mod local_gpt_sovits;
-pub mod local_rvc;
 pub mod local_vits;
 pub mod manager;
 pub mod omnivoice;

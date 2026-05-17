@@ -6,7 +6,6 @@ use super::config::{ProviderConfig, TtsSystemConfig};
 use super::edge::EdgeTtsProvider;
 use super::interface::{ProviderCapabilities, TtsError, TtsParams, TtsProvider, VoiceProfile};
 use super::local_gpt_sovits::LocalGPTSoVITSProvider;
-use super::local_rvc::LocalRVCProvider;
 use super::local_vits::LocalVITSProvider;
 use super::omnivoice::OmniVoiceProvider;
 use super::openai::OpenAITtsProvider;
@@ -145,9 +144,6 @@ impl TtsService {
                 .map(|p| Box::new(p) as Box<dyn TtsProvider>),
             "omnivoice" => {
                 OmniVoiceProvider::from_config(config).map(|p| Box::new(p) as Box<dyn TtsProvider>)
-            }
-            "local_rvc" => {
-                LocalRVCProvider::from_config(config).map(|p| Box::new(p) as Box<dyn TtsProvider>)
             }
             "azure" => {
                 AzureTtsProvider::from_config(config).map(|p| Box::new(p) as Box<dyn TtsProvider>)

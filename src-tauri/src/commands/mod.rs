@@ -16,7 +16,6 @@ pub mod mcp;
 pub mod memory;
 pub mod mods;
 pub mod pet;
-pub mod singing;
 pub mod stt;
 pub mod system;
 pub mod telegram;

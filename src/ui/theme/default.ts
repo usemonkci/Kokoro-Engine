@@ -50,14 +50,9 @@ export const defaultTheme: ThemeConfig = {
         "--shadow-lg": "0 8px 32px rgba(0, 0, 0, 0.3)",
 
         // Typography
-        "--font-heading": "'Rajdhani', sans-serif",
-        "--font-body": "'Quicksand', sans-serif",
+        "--font-heading": "'Rajdhani', 'Bahnschrift', 'Arial Narrow', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif",
+        "--font-body": "'Quicksand', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif",
         "--font-mono": "'JetBrains Mono', 'Fira Code', 'Consolas', 'Microsoft YaHei', 'SimHei', monospace",
-    },
-    assets: {
-        fonts: [
-            "https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Quicksand:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
-        ],
     },
     animations: {
         panelEntry: {

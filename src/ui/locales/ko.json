@@ -13,55 +13,6 @@
             "refresh": "새로고침"
         }
     },
-    "sing": {
-        "rvc_server": {
-            "title": "RVC 서버",
-            "checking": "확인 중...",
-            "online": "온라인 — 변환 준비 완료",
-            "offline": "오프라인 — RVC 서버를 시작하세요",
-            "refresh": "새로고침"
-        },
-        "file_selection": {
-            "title": "노래 파일",
-            "placeholder": "오디오 파일 선택 (.mp3, .wav, .flac ...)"
-        },
-        "settings": {
-            "model_label": "RVC 음성 모델",
-            "default_model": "기본값",
-            "pitch_shift": "피치 이동 (반음)",
-            "separate_vocals": {
-                "title": "보컬 분리",
-                "description": "노래에서 보컬 자동 추출"
-            },
-            "advanced": {
-                "toggle": "고급 설정",
-                "f0_method": {
-                    "label": "피치 추출 알고리즘 (F0 Method)",
-                    "rmvpe": "RMVPE (추천)",
-                    "pm": "PM (빠름)",
-                    "harvest": "Harvest (저음용)",
-                    "crepe": "Crepe (고품질, GPU)"
-                },
-                "index_path": {
-                    "label": "특징 인덱스 파일 (.index)",
-                    "placeholder": "기본값을 사용하려면 비워두세요"
-                },
-                "index_rate": "인덱스 비율"
-            }
-        },
-        "actions": {
-            "convert": "변환 시작",
-            "converting": "변환 중...",
-            "progress": {
-                "reading": "오디오 읽는 중...",
-                "converting": "변환 중...",
-                "done": "완료!"
-            },
-            "play": "재생",
-            "pause": "일시 정지",
-            "success": "변환 완료!"
-        }
-    },
     "settings": {
         "title": "설정",
         "tabs": {
@@ -72,7 +23,6 @@
             "persona": "페르소나",
             "tts": "음성 합성",
             "stt": "음성 인식",
-            "sing": "노래",
             "memory": "기억",
             "vision": "시각",
             "mods": "모드",

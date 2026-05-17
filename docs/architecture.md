@@ -105,7 +105,6 @@ src/
 │   │       ├── ApiTab.tsx         # LLM/API config (multi-provider, presets)
 │   │       ├── TtsTab.tsx         # TTS provider setup
 │   │       ├── SttTab.tsx         # Speech-to-text config
-│   │       ├── SingTab.tsx        # RVC singing config
 │   │       ├── ModelTab.tsx       # Live2D model selection
 │   │       ├── BackgroundTab.tsx  # Background slideshow
 │   │       ├── VisionTab.tsx      # Vision/screenshot config
@@ -132,7 +131,7 @@ src/
 
 Settings panel tabs currently include:
 - persona, model, tts, stt, bg, imagegen
-- vision, memory, mcp, mods, sing, telegram
+- vision, memory, mcp, mods, telegram
 - api, jailbreak, pet, backup
 ```
 
@@ -160,7 +159,6 @@ src-tauri/src/
 │   ├── live2d.rs                  # Live2D model import/export/profile
 │   ├── live2d_protocol.rs         # live2d:// protocol handler
 │   ├── memory.rs                  # Memory CRUD & tiering
-│   ├── singing.rs                 # RVC voice conversion
 │   ├── actions.rs                 # Action registry & execution
 │   ├── tool_settings.rs           # Tool enablement + max feedback rounds
 │   ├── backup.rs                  # Data export/import
@@ -210,7 +208,6 @@ src-tauri/src/
 │   ├── browser.rs                 # Browser TTS (Web Speech API)
 │   ├── local_gpt_sovits.rs        # GPT-SoVITS local
 │   ├── local_vits.rs              # VITS local
-│   ├── local_rvc.rs               # RVC voice conversion
 │   ├── cloud_base.rs              # Cloud provider base
 │   └── mod.rs
 │
@@ -379,7 +376,6 @@ graph TD
     IF --> SOVITS["GPT-SoVITS"]
     IF --> OAITTS["OpenAI TTS"]
     IF --> BTTS["Browser TTS"]
-    IF --> RVC["RVC"]
 
     MCP --> BRIDGE["MCP Bridge"]
     BRIDGE --> ACT
@@ -451,7 +447,6 @@ The command set is defined by `tauri::generate_handler![]` in `src-tauri/src/lib
 | MCP | `list_mcp_servers`, `add_mcp_server`, `remove_mcp_server`, `refresh_mcp_tools`, `reconnect_mcp_server`, `toggle_mcp_server` | `mcp.rs` |
 | MOD | `list_mods`, `load_mod`, `install_mod`, `get_mod_theme`, `get_mod_layout`, `dispatch_mod_event`, `unload_mod` | `mods.rs` |
 | Live2D assets | `import_live2d_zip`, `import_live2d_folder`, `export_live2d_model`, `list_live2d_models`, `delete_live2d_model`, `rename_live2d_model`, `get_live2d_model_profile`, `save_live2d_model_profile`, `set_active_live2d_model` | `live2d.rs` |
-| Singing | `check_rvc_status`, `list_rvc_models`, `convert_singing` | `singing.rs` |
 | Telegram | `get_telegram_config`, `save_telegram_config`, `start_telegram_bot`, `stop_telegram_bot`, `get_telegram_status` | `telegram.rs` |
 | Backup | `export_data`, `preview_import`, `import_data`, `get_auto_backup_config`, `save_auto_backup_config`, `run_auto_backup_now` | `backup.rs`, `auto_backup.rs` |
 | Pet window | `show_pet_window`, `hide_pet_window`, `set_pet_drag_mode`, `get_pet_config`, `save_pet_config`, `move_pet_window`, `resize_pet_window`, `show_bubble_window`, `update_bubble_text`, `hide_bubble_window` | `pet.rs` |
@@ -595,8 +590,7 @@ Text ──▶ TtsService ──▶ TtsRouter::select_provider() ──▶ TtsPr
               ├─ local_vits.rs
               ├─ openai.rs
               ├─ edge.rs
-              ├─ browser.rs
-              └─ local_rvc.rs
+              └─ browser.rs
 ```
 
 - **`TtsProvider` trait** — provider abstraction for synth and capabilities.

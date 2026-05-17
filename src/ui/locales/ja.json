@@ -13,55 +13,6 @@
             "refresh": "更新"
         }
     },
-    "sing": {
-        "rvc_server": {
-            "title": "RVC サーバー",
-            "checking": "確認中...",
-            "online": "オンライン — 変換準備完了",
-            "offline": "オフライン — RVCサーバーを起動してください",
-            "refresh": "更新"
-        },
-        "file_selection": {
-            "title": "曲ファイル",
-            "placeholder": "音声ファイルを選択 (.mp3, .wav, .flac ...)"
-        },
-        "settings": {
-            "model_label": "RVC 音声モデル",
-            "default_model": "デフォルト",
-            "pitch_shift": "ピッチシフト (半音)",
-            "separate_vocals": {
-                "title": "ボーカル分離",
-                "description": "曲からボーカルを自動抽出"
-            },
-            "advanced": {
-                "toggle": "詳細設定",
-                "f0_method": {
-                    "label": "ピッチ抽出アルゴリズム (F0 Method)",
-                    "rmvpe": "RMVPE (推奨)",
-                    "pm": "PM (高速)",
-                    "harvest": "Harvest (低音向け)",
-                    "crepe": "Crepe (高品質, GPU)"
-                },
-                "index_path": {
-                    "label": "特徴インデックスファイル (.index)",
-                    "placeholder": "デフォルトを使用する場合は空欄"
-                },
-                "index_rate": "インデックス率"
-            }
-        },
-        "actions": {
-            "convert": "変換開始",
-            "converting": "変換中...",
-            "progress": {
-                "reading": "音声読み込み中...",
-                "converting": "変換中...",
-                "done": "完了！"
-            },
-            "play": "再生",
-            "pause": "一時停止",
-            "success": "変換完了！"
-        }
-    },
     "settings": {
         "title": "設定",
         "tabs": {
@@ -72,7 +23,6 @@
             "persona": "ペルソナ",
             "tts": "音声合成",
             "stt": "音声認識",
-            "sing": "歌唱",
             "memory": "記憶",
             "vision": "ビジョン",
             "mods": "MODS",

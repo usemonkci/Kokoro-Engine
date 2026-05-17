@@ -13,55 +13,6 @@
             "refresh": "Refresh"
         }
     },
-    "sing": {
-        "rvc_server": {
-            "title": "RVC Server",
-            "checking": "Checking...",
-            "online": "Online — Ready to Convert",
-            "offline": "Offline — Please start RVC Server",
-            "refresh": "REFRESH"
-        },
-        "file_selection": {
-            "title": "Song File",
-            "placeholder": "Select audio file (.mp3, .wav, .flac ...)"
-        },
-        "settings": {
-            "model_label": "RVC Voice Model",
-            "default_model": "Default",
-            "pitch_shift": "Pitch Shift (Semitones)",
-            "separate_vocals": {
-                "title": "Vocal Separation",
-                "description": "Automatically extract vocals from song"
-            },
-            "advanced": {
-                "toggle": "Advanced Settings",
-                "f0_method": {
-                    "label": "Pitch Algorithm (F0 Method)",
-                    "rmvpe": "RMVPE (Recommended)",
-                    "pm": "PM (Fast)",
-                    "harvest": "Harvest (Good for low pitch)",
-                    "crepe": "Crepe (High quality, GPU)"
-                },
-                "index_path": {
-                    "label": "Feature Index File (.index)",
-                    "placeholder": "Leave empty for default"
-                },
-                "index_rate": "Index Rate"
-            }
-        },
-        "actions": {
-            "convert": "Convert",
-            "converting": "Converting...",
-            "progress": {
-                "reading": "Reading audio...",
-                "converting": "Converting...",
-                "done": "Done!"
-            },
-            "play": "Play",
-            "pause": "Pause",
-            "success": "Conversion Complete!"
-        }
-    },
     "settings": {
         "title": "SETTINGS",
         "tabs": {
@@ -72,7 +23,6 @@
             "persona": "PERSONA",
             "tts": "TTS",
             "stt": "STT",
-            "sing": "SING",
             "memory": "MEMORY",
             "vision": "VISION",
             "mods": "MODS",

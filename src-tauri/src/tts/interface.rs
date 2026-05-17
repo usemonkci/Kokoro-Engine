@@ -89,7 +89,6 @@ pub enum Gender {
 #[serde(rename_all = "lowercase")]
 pub enum TtsEngine {
     Vits,
-    Rvc,
     Cloud,
     Native, // Browser SpeechSynthesis
 }

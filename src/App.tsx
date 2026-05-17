@@ -191,11 +191,6 @@ import {
   updateMemoryTier,
   deleteMemory,
   downloadMemoryEmbeddingModel,
-  // New: Singing (RVC)
-  checkRvcStatus,
-  listRvcModels,
-  convertSinging,
-  // onSingingProgress — reserved for future use
   // New: ImageGen
   testSdConnection,
   setWindowSize,
@@ -237,8 +232,6 @@ import {
   type BotStatus,
   type AutoBackupConfig,
   type ImportPreview,
-  type RvcModelInfo,
-  type SingingProgressEvent,
   type CharacterRecord,
   type MemoryEmbeddingModelStatus,
   type MemoryEmbeddingModelDownloadProgress,
@@ -371,12 +364,9 @@ function App() {
   const [voiceInterrupt, setVoiceInterrupt] = useState(false);
   const [fetchedLlmModels, setFetchedLlmModels] = useState<string[]>([]);
   const [scannedTtsModels, setScannedTtsModels] = useState<Record<string, GptSovitsModels>>({});
-  // New: Memory, Sing, MCP, Vision, ImageGen dynamic state for mods
+  // New: Memory, MCP, Vision, ImageGen dynamic state for mods
   const [memoryList, setMemoryList] = useState<MemoryRecord[]>([]);
   const [memoryTotal, setMemoryTotal] = useState(0);
-  const [rvcAvailable, setRvcAvailable] = useState(false);
-  const [rvcModels, setRvcModels] = useState<RvcModelInfo[]>([]);
-  const [singProgress, setSingProgress] = useState<SingingProgressEvent | null>(null);
   const [sdModels, setSdModels] = useState<string[]>([]);
   const [capturedScreenUrl, setCapturedScreenUrl] = useState<string | null>(null);
   const [userLanguage, setUserLanguageState] = useState(() => localStorage.getItem("kokoro_user_language") || "zh");
@@ -1450,24 +1440,6 @@ function App() {
         .catch(err => console.error('[App] Memory delete failed:', err));
     }
 
-    // ── Singing (RVC) Actions ──────────────────────
-    if (detail.action === 'check_rvc_status') {
-      checkRvcStatus()
-        .then(available => setRvcAvailable(available))
-        .catch(err => console.error('[App] RVC check failed:', err));
-    }
-    if (detail.action === 'list_rvc_models') {
-      listRvcModels()
-        .then(models => setRvcModels(models))
-        .catch(err => console.error('[App] RVC models list failed:', err));
-    }
-    if (detail.action === 'convert_singing' && detail.data) {
-      const { audioPath, modelName, pitchShift, separateVocals, f0Method } = detail.data;
-      convertSinging(audioPath, modelName, pitchShift, separateVocals, f0Method)
-        .then(result => setSingProgress({ stage: 'done', progress: 100, output_path: result.output_path }))
-        .catch(err => console.error('[App] Singing conversion failed:', err));
-    }
-
     // ── ImageGen Actions ───────────────────────────
     if (detail.action === 'test_sd_connection' && detail.data?.baseUrl) {
       testSdConnection(detail.data.baseUrl)
@@ -1779,9 +1751,6 @@ function App() {
             // New: Full Parity Props
             memoryList={memoryList}
             memoryTotal={memoryTotal}
-            rvcAvailable={rvcAvailable}
-            rvcModels={rvcModels}
-            singProgress={singProgress}
             sdModels={sdModels}
             capturedScreenUrl={capturedScreenUrl}
             userLanguage={userLanguage}

@@ -27,7 +27,7 @@ export interface ProviderStatus {
 }
 
 export type Gender = "male" | "female" | "neutral";
-export type TtsEngine = "vits" | "rvc" | "cloud" | "native";
+export type TtsEngine = "vits" | "cloud" | "native";
 
 export interface VoiceProfile {
     voice_id: string;

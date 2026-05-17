@@ -13,55 +13,6 @@
             "refresh": "刷新"
         }
     },
-    "sing": {
-        "rvc_server": {
-            "title": "RVC Server",
-            "checking": "检测中...",
-            "online": "在线 — 可以开始转换",
-            "offline": "离线 — 请启动 RVC 服务器",
-            "refresh": "刷新"
-        },
-        "file_selection": {
-            "title": "歌曲文件",
-            "placeholder": "选择音频文件 (.mp3, .wav, .flac ...)"
-        },
-        "settings": {
-            "model_label": "RVC 声音模型",
-            "default_model": "默认",
-            "pitch_shift": "音高调整 (半音)",
-            "separate_vocals": {
-                "title": "人声分离",
-                "description": "自动从歌曲中提取人声"
-            },
-            "advanced": {
-                "toggle": "高级设置",
-                "f0_method": {
-                    "label": "音高提取算法 (F0 Method)",
-                    "rmvpe": "RMVPE (推荐)",
-                    "pm": "PM (快速)",
-                    "harvest": "Harvest (低音好)",
-                    "crepe": "Crepe (效果好，GPU)"
-                },
-                "index_path": {
-                    "label": "特征索引文件 (.index)",
-                    "placeholder": "留空使用默认"
-                },
-                "index_rate": "检索特征占比"
-            }
-        },
-        "actions": {
-            "convert": "开始转换",
-            "converting": "转换中...",
-            "progress": {
-                "reading": "读取音频...",
-                "converting": "转换中...",
-                "done": "完成！"
-            },
-            "play": "播放",
-            "pause": "暂停",
-            "success": "转换完成！"
-        }
-    },
     "settings": {
         "title": "设置",
         "tabs": {
@@ -72,7 +23,6 @@
             "persona": "人设",
             "tts": "语音合成",
             "stt": "语音识别",
-            "sing": "歌唱",
             "memory": "记忆",
             "vision": "视觉",
             "mods": "模组",

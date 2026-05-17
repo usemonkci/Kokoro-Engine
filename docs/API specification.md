@@ -782,14 +782,6 @@ The tables below list the current IPC commands. The `Bridge` column shows whethe
 | `save_auto_backup_config` | `saveAutoBackupConfig` | `config: AutoBackupConfig` | `void` | Saves auto backup config. |
 | `run_auto_backup_now` | `runAutoBackupNow` | none | `string` | Runs a backup immediately. |
 
-### Singing
-
-| Command | Bridge | Request | Response | Notes |
-|---|---|---|---|---|
-| `check_rvc_status` | `checkRvcStatus` | none | `boolean` | Checks whether RVC is available. |
-| `list_rvc_models` | `listRvcModels` | none | `RvcModelInfo[]` | Lists available RVC models. |
-| `convert_singing` | `convertSinging` | `audioPath: string`, `modelName?: string`, `pitchShift?: number`, `separateVocals?: boolean`, `f0Method?: string`, `indexPath?: string`, `indexRate?: number` | `SingingResult` | Converts singing audio. |
-
 ### Commands registered in Rust but not exposed by the bridge
 
 These commands exist in `src-tauri/src/lib.rs`, but `src/lib/kokoro-bridge.ts` does not export wrappers for them yet.
@@ -992,7 +984,7 @@ If you want structured handling, use `parseKokoroError` from `kokoro-bridge.ts`.
 - database: `initDb`, `testVectorStore`, `sendMessage`
 - context: `setPersona`, `setCharacterName`, `setActiveCharacterId`, `setUserName`, `setResponseLanguage`, `setUserLanguage`, `setJailbreakPrompt`, `getJailbreakPrompt`, `setProactiveEnabled`, `getProactiveEnabled`, `clearHistory`, `setMemoryEnabled`, `getMemoryEnabled`, `getContextSettings`, `setContextSettings`, `deleteLastMessages`
 - llm/chat: `getLlmConfig`, `saveLlmConfig`, `listOllamaModels`, `streamChat`, `cancelChatTurn`, `approveToolApproval`, `rejectToolApproval`
-- mod/live2d/imagegen/vision/memory/stt/actions/mcp/telegram/backup/characters/singing: see the command tables above
+- mod/live2d/imagegen/vision/memory/stt/actions/mcp/telegram/backup/characters: see the command tables above
 
 ### Exported event wrappers
 
@@ -1001,7 +993,6 @@ If you want structured handling, use `parseKokoroError` from `kokoro-bridge.ts`.
 - imagegen: `onChatImageGen`, `onImageGenDone`, `onImageGenError`
 - vision: `onVisionObservation`, `onCameraObservation`
 - STT: `onSenseVoiceLocalProgress`
-- singing: `onSingingProgress`
 - telegram: `onTelegramChatSync`
 
 ### Bridge-only helpers

@@ -131,8 +131,6 @@ const ALLOWED_MOD_COMMANDS = new Set([
     // STT local model setup
     'get_sensevoice_local_status',
     'download_sensevoice_local_model',
-    // TTS utilities
-    'convert_singing',
     // Dialog (file picker)
     'plugin:dialog|open',
 ]);

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { clsx } from "clsx";
-import { X, Key, User, Volume2, Package, Image, PersonStanding, Save, Check, Sparkles, Brain, Mic, Music, Eye, Server, Bot, Shield, HardDrive, Ghost, Info } from "lucide-react";
+import { X, Key, User, Volume2, Package, Image, PersonStanding, Save, Check, Sparkles, Brain, Mic, Eye, Server, Bot, Shield, HardDrive, Ghost, Info } from "lucide-react";
 import { ModList } from "../mods/ModList";
 import { Select } from "@/components/ui/select";
 import CharacterManager from "./CharacterManager";
@@ -10,7 +10,6 @@ import MemoryPanel from "./MemoryPanel";
 import ApiTab from "./settings/ApiTab";
 import TtsTab from "./settings/TtsTab";
 import SttTab from "./settings/SttTab";
-import SingTab from "./settings/SingTab";
 import ModelTab from "./settings/ModelTab";
 import BackgroundTab from "./settings/BackgroundTab";
 import VisionTab from "./settings/VisionTab";
@@ -40,8 +39,6 @@ import type {
     ModManifest,
     GptSovitsModels,
     MemoryRecord,
-    RvcModelInfo,
-    SingingProgressEvent,
     CharacterRecord,
 } from "../../lib/kokoro-bridge";
 import { normalizeBackgroundConfigForImageCount, type BackgroundConfig } from "../hooks/useBackgroundSlideshow";
@@ -52,7 +49,6 @@ const SETTINGS_TAB_IDS = [
     "persona",
     "tts",
     "stt",
-    "sing",
     "mods",
     "bg",
     "model",
@@ -130,9 +126,6 @@ interface SettingsPanelProps {
     // New: Full Parity Props
     memoryList?: MemoryRecord[];
     memoryTotal?: number;
-    rvcAvailable?: boolean;
-    rvcModels?: RvcModelInfo[];
-    singProgress?: SingingProgressEvent | null;
     sdModels?: string[];
     capturedScreenUrl?: string | null;
     userLanguage?: string;
@@ -159,7 +152,6 @@ const tabs: { id: SettingsTabId; label: string; icon: typeof Key }[] = [
     { id: "mcp", label: "settings.tabs.mcp", icon: Server },
     // 外部集成
     { id: "mods", label: "settings.tabs.mods", icon: Package },
-    { id: "sing", label: "settings.tabs.sing", icon: Music },
     { id: "bot", label: "settings.tabs.bot", icon: Bot },
     // 系统 / 高级
     { id: "api", label: "settings.tabs.api", icon: Key },
@@ -774,12 +766,6 @@ export default function SettingsPanel({ isOpen, onClose, activeTab: activeTabPro
                                         voiceInterrupt={voiceInterrupt}
                                         onVoiceInterruptChange={setVoiceInterrupt}
                                     />
-                                </div>
-                            )}
-
-                            {mountedTabs.has("sing") && (
-                                <div className={activeTab === "sing" ? "block" : "hidden"}>
-                                    <SingTab />
                                 </div>
                             )}
 

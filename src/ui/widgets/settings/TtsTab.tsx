@@ -466,7 +466,7 @@ export default function TtsTab({
                                         )}
 
                                         {/* Base URL Field */}
-                                        {(provider.provider_type === "openai" || provider.provider_type === "local_vits" || provider.provider_type === "gpt_sovits" || provider.provider_type === "local_rvc") && (
+                                        {(provider.provider_type === "openai" || provider.provider_type === "local_vits" || provider.provider_type === "gpt_sovits") && (
                                             <div>
                                                 <label className={labelClasses}>
                                                     {(provider.provider_type.includes("local") || provider.provider_type === "gpt_sovits") ? t("settings.tts.fields.server_url") : t("settings.tts.fields.base_url")}

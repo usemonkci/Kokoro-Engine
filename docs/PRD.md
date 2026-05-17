@@ -70,7 +70,6 @@
 - [x] Vision system (screen capture, VLM analysis, pixel diff detection)
 - [x] Image generation (Stable Diffusion WebUI, DALL-E, Google Gemini)
 - [x] STT (Whisper, faster-whisper, whisper.cpp)
-- [x] RVC voice conversion (singing)
 - [x] Autonomous behavior (curiosity, initiative, idle behaviors)
 - [x] Telegram Bot remote interaction (long polling, text/voice/photo, session commands)
 - [x] Multi-provider LLM (unique Provider IDs, separate main/system LLM)

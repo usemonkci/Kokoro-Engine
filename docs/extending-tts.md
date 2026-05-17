@@ -20,7 +20,6 @@ This guide explains how to add a new TTS provider to Kokoro Engine. The system i
 │  speak()──────┘ │                    │ Azure      │
 └─────────────────┘                    │ ElevenLabs │
                                        │ Browser    │
-                                       │ RVC        │
                                        │ YourNew    │
                                        └────────────┘
 ```
@@ -74,7 +73,7 @@ impl TtsProvider for MyTTSProvider {
             name: "My Voice".to_string(),
             gender: Gender::Neutral,
             language: "en".to_string(),
-            engine: TtsEngine::Cloud, // or Vits, Rvc, Native
+            engine: TtsEngine::Cloud, // or Vits, Native
             provider_id: "my_provider".to_string(),
             extra_params: Default::default(),
         }]
