@@ -12,6 +12,7 @@ import { registerCoreComponents } from "./core/init";
 import { ttsService } from "./core/services";
 import SettingsPanel, { normalizeSettingsTabId, type SettingsTabId } from "./ui/widgets/SettingsPanel";
 import BackgroundLayer from "./ui/widgets/BackgroundLayer";
+import WindowTitleBar from "./ui/widgets/WindowTitleBar";
 import OnboardingOverlay, {
   type OnboardingLanguageCode,
   type OnboardingStep,
@@ -105,7 +106,7 @@ function createLayout(options: {
                 onWidthPreview: options.onChatPanelWidthPreview,
                 onWidthChange: options.onChatPanelWidthChange,
               },
-              style: { pointerEvents: "auto", margin: "20px 0 20px 20px", padding: "0" },
+              style: { pointerEvents: "auto", margin: "48px 0 20px 20px", padding: "0" },
               motion: "panelEntry"
             }
           ]
@@ -1743,6 +1744,8 @@ function App() {
       />
 
       {/* Floating settings gear — top-right corner */}
+      <WindowTitleBar />
+
       <motion.button
         initial={false}
         whileHover="hover"
@@ -1750,7 +1753,7 @@ function App() {
         transition={{ type: "spring", stiffness: 360, damping: 26 }}
         onClick={() => setSettingsOpen(true)}
         data-onboarding-id="settings-button"
-        className="fixed top-[34px] right-[35px] z-50 p-3 rounded-full bg-[var(--color-bg-surface)] backdrop-blur-[var(--glass-blur)] border border-[var(--color-border)] text-[var(--color-text-secondary)] shadow-lg transition-[color,border-color,box-shadow] duration-200 ease-out hover:border-[var(--color-border-accent)] hover:text-[var(--color-accent)] hover:shadow-[0_0_18px_rgba(0,240,255,0.18)]"
+        className="fixed top-[52px] right-[35px] z-50 p-3 rounded-full bg-[var(--color-bg-surface)] backdrop-blur-[var(--glass-blur)] border border-[var(--color-border)] text-[var(--color-text-secondary)] shadow-lg transition-[color,border-color,box-shadow] duration-200 ease-out hover:border-[var(--color-border-accent)] hover:text-[var(--color-accent)] hover:shadow-[0_0_18px_rgba(0,240,255,0.18)]"
         aria-label="Open settings"
       >
         <motion.span

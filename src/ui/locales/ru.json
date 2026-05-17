@@ -11,6 +11,17 @@
       "add": "Добавить",
       "rename": "Переименовать",
       "refresh": "Обновить"
+    },
+    "window_controls": {
+      "group": "Управление окном",
+      "close": "Закрыть",
+      "close_window": "Закрыть окно",
+      "minimize": "Свернуть",
+      "minimize_window": "Свернуть окно",
+      "maximize": "Развернуть",
+      "maximize_window": "Развернуть окно",
+      "restore": "Восстановить",
+      "restore_window": "Восстановить окно"
     }
   },
   "settings": {

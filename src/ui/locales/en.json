@@ -11,6 +11,17 @@
             "add": "Add",
             "rename": "Rename",
             "refresh": "Refresh"
+        },
+        "window_controls": {
+            "group": "Window controls",
+            "close": "Close",
+            "close_window": "Close window",
+            "minimize": "Minimize",
+            "minimize_window": "Minimize window",
+            "maximize": "Maximize",
+            "maximize_window": "Maximize window",
+            "restore": "Restore",
+            "restore_window": "Restore window"
         }
     },
     "settings": {

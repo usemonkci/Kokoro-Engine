@@ -11,6 +11,17 @@
             "add": "添加",
             "rename": "重命名",
             "refresh": "刷新"
+        },
+        "window_controls": {
+            "group": "窗口控制",
+            "close": "关闭",
+            "close_window": "关闭窗口",
+            "minimize": "最小化",
+            "minimize_window": "最小化窗口",
+            "maximize": "最大化",
+            "maximize_window": "最大化窗口",
+            "restore": "还原",
+            "restore_window": "还原窗口"
         }
     },
     "settings": {

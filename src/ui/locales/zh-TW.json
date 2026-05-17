@@ -11,6 +11,17 @@
             "add": "新增",
             "rename": "重命名",
             "refresh": "重新整理"
+        },
+        "window_controls": {
+            "group": "視窗控制",
+            "close": "關閉",
+            "close_window": "關閉視窗",
+            "minimize": "最小化",
+            "minimize_window": "最小化視窗",
+            "maximize": "最大化",
+            "maximize_window": "最大化視窗",
+            "restore": "還原",
+            "restore_window": "還原視窗"
         }
     },
     "settings": {

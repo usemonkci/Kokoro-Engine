@@ -11,6 +11,17 @@
             "add": "추가",
             "rename": "이름 변경",
             "refresh": "새로고침"
+        },
+        "window_controls": {
+            "group": "창 컨트롤",
+            "close": "닫기",
+            "close_window": "창 닫기",
+            "minimize": "최소화",
+            "minimize_window": "창 최소화",
+            "maximize": "최대화",
+            "maximize_window": "창 최대화",
+            "restore": "복원",
+            "restore_window": "창 복원"
         }
     },
     "settings": {
