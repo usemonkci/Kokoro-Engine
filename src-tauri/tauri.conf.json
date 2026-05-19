@@ -33,7 +33,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../mods": "mods"
+      "../mods": "mods",
+      "../public/live2d": "live2d"
     },
     "windows": {
       "nsis": {
