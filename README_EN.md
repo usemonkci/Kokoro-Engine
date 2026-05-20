@@ -108,7 +108,7 @@ For more Nix usage, see [docs/nix.md](docs/nix.md).
 
 ### Voice stack
 
-- TTS (text-to-speech): GPT-SoVITS, VITS, OpenAI, Azure, ElevenLabs, Edge TTS, Browser TTS.
+- TTS (text-to-speech): GPT-SoVITS, VITS, OmniVoice, OpenAI, Azure, ElevenLabs, Edge TTS, Browser TTS.
 - STT (speech-to-text): Whisper / faster-whisper / whisper.cpp / SenseVoice.
 - Supports VAD auto-stop and wake-word flow.
 

@@ -108,7 +108,7 @@ Nix 상세 내용은 [docs/nix.md](docs/nix.md)를 참고하세요.
 
 ### 음성 스택
 
-- TTS(텍스트 음성 변환): GPT-SoVITS, VITS, OpenAI, Azure, ElevenLabs, Edge TTS, Browser TTS.
+- TTS(텍스트 음성 변환): GPT-SoVITS, VITS, OmniVoice, OpenAI, Azure, ElevenLabs, Edge TTS, Browser TTS.
 - STT(음성 텍스트 변환): Whisper / faster-whisper / whisper.cpp / SenseVoice.
 - VAD 자동 정지 및 웨이크워드 흐름 지원.
 

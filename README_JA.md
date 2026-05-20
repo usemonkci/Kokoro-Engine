@@ -108,7 +108,7 @@ Nix の詳細は [docs/nix.md](docs/nix.md) を参照してください。
 
 ### 音声スタック
 
-- TTS（テキスト読み上げ）：GPT-SoVITS、VITS、OpenAI、Azure、ElevenLabs、Edge TTS、Browser TTS。
+- TTS（テキスト読み上げ）：GPT-SoVITS、VITS、OmniVoice、OpenAI、Azure、ElevenLabs、Edge TTS、Browser TTS。
 - STT（音声認識）：Whisper / faster-whisper / whisper.cpp / SenseVoice。
 - VAD 自動停止とウェイクワード連携をサポート。
 

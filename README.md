@@ -109,7 +109,7 @@ npm run tauri dev
 
 ### 音频交互
 
-- TTS（文本转语音）：GPT-SoVITS、VITS、OpenAI、Azure、ElevenLabs、Edge TTS、Browser TTS
+- TTS（文本转语音）：GPT-SoVITS、VITS、OmniVoice、OpenAI、Azure、ElevenLabs、Edge TTS、Browser TTS
 - STT（语音转文本）：Whisper / faster-whisper / whisper.cpp / SenseVoice
 - 支持 VAD 自动停录与唤醒词链路
 

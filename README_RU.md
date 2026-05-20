@@ -108,7 +108,7 @@ npm run tauri dev
 
 ### Голосовой стек
 
-- TTS (текст в речь): GPT-SoVITS, VITS, OpenAI, Azure, ElevenLabs, Edge TTS, Browser TTS.
+- TTS (текст в речь): GPT-SoVITS, VITS, OmniVoice, OpenAI, Azure, ElevenLabs, Edge TTS, Browser TTS.
 - STT (речь в текст): Whisper / faster-whisper / whisper.cpp / SenseVoice.
 - Поддержка VAD-автоостановки и wake-word цепочки.
 

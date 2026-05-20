@@ -107,7 +107,7 @@ npm run tauri dev
 
 ### 音訊互動
 
-- TTS（文字轉語音）：GPT-SoVITS、VITS、OpenAI、Azure、ElevenLabs、Edge TTS、Browser TTS
+- TTS（文字轉語音）：GPT-SoVITS、VITS、OmniVoice、OpenAI、Azure、ElevenLabs、Edge TTS、Browser TTS
 - STT（語音轉文字）：Whisper / faster-whisper / whisper.cpp / SenseVoice
 - 支援 VAD 自動停錄與喚醒詞鏈路
 
