@@ -26,6 +26,19 @@
 
         src = lib.cleanSource ./.;
 
+        sherpaOnnxArchiveName = "sherpa-onnx-v1.12.33-linux-x64-static-lib.tar.bz2";
+        sherpaOnnxArchive = pkgs.fetchurl {
+          name = sherpaOnnxArchiveName;
+          url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.33/${sherpaOnnxArchiveName}";
+          hash = "sha256-wyFodE8ppr0ITelab48WdAWm+9OrKpGV/dHAZiy510c=";
+        };
+        sherpaOnnxArchiveDir = pkgs.linkFarm "sherpa-onnx-prebuilt-archives" [
+          {
+            name = sherpaOnnxArchiveName;
+            path = sherpaOnnxArchive;
+          }
+        ];
+
         runtimeLibraries = with pkgs; [
           alsa-lib
           atk
@@ -61,7 +74,7 @@
           npmDeps = pkgs.fetchNpmDeps {
             name = "${pname}-${version}-npm-deps";
             inherit src;
-            hash = "sha256-LdtyukW15us0UBRXT/MIhS7IacxlgEJm1HNo65TKdSM=";
+            hash = "sha256-1VCTyKmUKgx4f0bCmxz/tS/xojwiPzpEwO1iw4yYZYk=";
           };
 
           nativeBuildInputs = with pkgs; [
@@ -76,23 +89,24 @@
           buildInputs = runtimeLibraries;
 
           ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
+          ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
           ORT_PREFER_DYNAMIC_LINK = "1";
           ORT_SKIP_DOWNLOAD = "1";
+          SHERPA_ONNX_ARCHIVE_DIR = sherpaOnnxArchiveDir;
 
-          postInstall = ''
-            for bin in "$out"/bin/*; do
-              wrapProgram "$bin" \
-                --set GIO_MODULE_DIR ${pkgs.glib-networking}/lib/gio/modules \
-                --prefix GIO_EXTRA_MODULES : ${pkgs.glib-networking}/lib/gio/modules \
-                --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0 \
-                --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gstreamer}/lib/gstreamer-1.0 \
-                --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0 \
-                --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0 \
-                --set GST_PLUGIN_SCANNER ${pkgs.gst_all_1.gstreamer.out}/libexec/gstreamer-1.0/gst-plugin-scanner \
-                --prefix XDG_DATA_DIRS : ${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name} \
-                --set ORT_DYLIB_PATH ${pkgs.onnxruntime}/lib/libonnxruntime.so \
-                --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibraries}
-            done
+          preFixup = ''
+            gappsWrapperArgs+=(
+              --set GIO_MODULE_DIR ${pkgs.glib-networking}/lib/gio/modules
+              --prefix GIO_EXTRA_MODULES : ${pkgs.glib-networking}/lib/gio/modules
+              --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0
+              --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gstreamer}/lib/gstreamer-1.0
+              --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0
+              --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0
+              --set GST_PLUGIN_SCANNER ${pkgs.gst_all_1.gstreamer.out}/libexec/gstreamer-1.0/gst-plugin-scanner
+              --prefix XDG_DATA_DIRS : ${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}
+              --set ORT_DYLIB_PATH ${pkgs.onnxruntime}/lib/libonnxruntime.so
+              --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibraries}
+            )
           '';
 
           meta = with lib; {
@@ -140,6 +154,7 @@
             export ORT_DYLIB_PATH="${pkgs.onnxruntime}/lib/libonnxruntime.so"
             export ORT_PREFER_DYNAMIC_LINK=1
             export ORT_SKIP_DOWNLOAD=1
+            export SHERPA_ONNX_ARCHIVE_DIR="${sherpaOnnxArchiveDir}"
             export LD_LIBRARY_PATH=${lib.makeLibraryPath runtimeLibraries}:$LD_LIBRARY_PATH
           '';
         };

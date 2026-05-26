@@ -9,6 +9,9 @@ const ORT_VERSION: &str = "1.23.0";
 fn main() {
     // --- Tauri codegen (must always run) ---
     tauri_build::build();
+    println!("cargo:rerun-if-env-changed=ORT_DYLIB_PATH");
+    println!("cargo:rerun-if-env-changed=ORT_LIB_LOCATION");
+    println!("cargo:rerun-if-env-changed=ORT_SKIP_DOWNLOAD");
 
     // --- Auto-download ONNX Runtime shared library for `ort` (load-dynamic) ---
     let project_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -30,6 +33,22 @@ fn main() {
             copy_to_binary_dir(&dest, lib_name);
             return;
         }
+    }
+
+    if let Some(existing) = find_env_ort(lib_name) {
+        println!(
+            "cargo:warning=Using ONNX Runtime from {}",
+            existing.display()
+        );
+        copy_to_binary_dir(&existing, lib_name);
+        return;
+    }
+
+    if env_flag("ORT_SKIP_DOWNLOAD") {
+        panic!(
+            "ORT_SKIP_DOWNLOAD is set, but no usable ONNX Runtime library was found. \
+             Set ORT_DYLIB_PATH or ORT_LIB_LOCATION."
+        );
     }
 
     println!(
@@ -60,6 +79,24 @@ fn is_usable_dylib(path: &Path) -> bool {
             .metadata()
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false)
+}
+
+fn find_env_ort(lib_name: &str) -> Option<PathBuf> {
+    std::env::var_os("ORT_DYLIB_PATH")
+        .map(PathBuf::from)
+        .filter(|path| is_usable_dylib(path))
+        .or_else(|| {
+            std::env::var_os("ORT_LIB_LOCATION")
+                .map(PathBuf::from)
+                .map(|dir| dir.join(lib_name))
+                .filter(|path| is_usable_dylib(path))
+        })
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
 }
 
 /// Returns (library_filename, download_url) for the current build target.

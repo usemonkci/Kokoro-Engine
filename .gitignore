@@ -37,6 +37,10 @@ target-codex-*/
 src-tauri/target-codex-*/
 **/*.rs.bk
 
+# Nix
+result
+result-*
+
 # Database
 *.db
 *.db-shm
