@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-linux:
     name: Build Linux App
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-32
     steps:
       - uses: actions/checkout@v4
 
